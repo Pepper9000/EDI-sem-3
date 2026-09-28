@@ -1,0 +1,56 @@
+# Python bytecode and caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+**/.venv/
+**/venv/
+env/
+**/env/
+
+# Environment and secrets
+.env
+.env.*
+*.env
+*.secret
+secrets.*
+
+# Editors and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Local tooling caches
+pip-wheel-metadata/
+
+# Test artifacts
+.pytest_cache/
+
+# Keep legitimate app source tracked
+!backend/main.py
+!backend/test_api.py
+!backend/frontend/index.html
+!README.md/deep-research-report.md
