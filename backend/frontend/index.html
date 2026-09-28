@@ -683,6 +683,8 @@
 
             </div>
 
+            <div class="status" id="taskQueueSummary" style="margin-bottom: 12px;"></div>
+
 
             <form onsubmit="addTask(event)">
 
@@ -872,8 +874,31 @@
                 id="wearableStatus"
             ></div>
 
+            <div
+                class="status"
+                id="mlStatus"
+                style="margin-top: 20px;"
+            ></div>
+
         </div>
 
+    </div>
+
+
+    <div class="section">
+        <div class="card">
+            <div class="section-title">
+                <h2>
+                    Task Queue
+                </h2>
+                <span>
+                    Active work items
+                </span>
+            </div>
+            <div id="taskList" class="constraint-list">
+                <div class="status">No tasks yet.</div>
+            </div>
+        </div>
     </div>
 
 

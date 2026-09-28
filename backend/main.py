@@ -245,7 +245,16 @@ def conflicts_with_busy(start: int, end: int, schedule_date: date) -> bool:
     return False
 
 
-def find_task_slot(task_duration: int, schedule_date: date) -> int | None:
+def conflicts_with_reserved(start: int, end: int, reserved_intervals: list[tuple[int, int]] | None) -> bool:
+    if not reserved_intervals:
+        return False
+    for reserved_start, reserved_end in reserved_intervals:
+        if start < reserved_end and end > reserved_start:
+            return True
+    return False
+
+
+def find_task_slot(task_duration: int, schedule_date: date, reserved_intervals: list[tuple[int, int]] | None = None) -> int | None:
     for window in availability_windows:
         if window.date != schedule_date:
             continue
@@ -255,7 +264,11 @@ def find_task_slot(task_duration: int, schedule_date: date) -> int | None:
         start_candidate = window_start
 
         while start_candidate + task_duration <= window_end:
-            if not conflicts_with_busy(start_candidate, start_candidate + task_duration, schedule_date):
+            candidate_end = start_candidate + task_duration
+            if (
+                not conflicts_with_busy(start_candidate, candidate_end, schedule_date)
+                and not conflicts_with_reserved(start_candidate, candidate_end, reserved_intervals)
+            ):
                 return start_candidate
             start_candidate += 15
 
@@ -326,9 +339,10 @@ def generate_schedule():
     scored_tasks.sort(key=lambda item: item["score"], reverse=True)
 
     scheduled_entries = []
+    reserved_intervals: list[tuple[int, int]] = []
     for item in scored_tasks:
         task = item["task"]
-        slot = find_task_slot(task.duration, schedule_date)
+        slot = find_task_slot(task.duration, schedule_date, reserved_intervals)
         if slot is None:
             scheduled_entries.append({
                 "task": task.name,
@@ -340,6 +354,7 @@ def generate_schedule():
             })
             continue
 
+        reserved_intervals.append((slot, slot + task.duration))
         start_time = minutes_to_time(slot)
         end_time = minutes_to_time(slot + task.duration)
         reason = build_reason_list(task, effective_energy, item["urgency"], item["probability"])
