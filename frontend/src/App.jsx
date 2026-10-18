@@ -1112,36 +1112,6 @@ function App() {
           </section>
           {error ? <div className="error-banner" role="alert">{error}</div> : null}
 
-          {/* Calendar Trash Bin Drop Target */}
-          <section
-            className={`calendar-trash-bin ${draggedTask ? 'is-dragging' : ''} ${isTrashOver ? 'is-hovered' : ''} ${trashFeedback ? `feedback-${trashFeedback}` : ''}`}
-            onDragOver={handleTrashDragOver}
-            onDragLeave={handleTrashDragLeave}
-            onDrop={handleTrashDrop}
-            aria-label="Calendar trash bin drop zone"
-            role="region"
-          >
-            <div className="trash-bin-content">
-              <span className="trash-bin-icon" aria-hidden="true">
-                {trashFeedback === 'success' ? '✓' : trashFeedback === 'error' ? '⚠' : '🗑'}
-              </span>
-              <div className="trash-bin-text">
-                <span className="trash-bin-label">Drop here to delete</span>
-                <span className="trash-bin-sub">
-                  {trashFeedback === 'success'
-                    ? 'Task deleted successfully'
-                    : trashFeedback === 'error'
-                      ? 'Could not delete task'
-                      : isTrashOver && draggedTask
-                        ? `Release to delete “${draggedTask.task}”`
-                        : draggedTask
-                          ? `Drag here to remove “${draggedTask.task}”`
-                          : 'Drag any scheduled or unplaced task here to delete it'}
-                </span>
-              </div>
-            </div>
-          </section>
-
           <div className="calendar-layout">
             {/* Main Time-Grid */}
             <div className="calendar-grid-container">
@@ -1368,6 +1338,36 @@ function App() {
                   </form>
                 </div>
               ) : null}
+
+              {/* Calendar Trash Bin Drop Target */}
+              <section
+                className={`calendar-trash-bin ${draggedTask ? 'is-dragging' : ''} ${isTrashOver ? 'is-hovered' : ''} ${trashFeedback ? `feedback-${trashFeedback}` : ''}`}
+                onDragOver={handleTrashDragOver}
+                onDragLeave={handleTrashDragLeave}
+                onDrop={handleTrashDrop}
+                aria-label="Calendar trash bin drop zone"
+                role="region"
+              >
+                <div className="trash-bin-content">
+                  <span className="trash-bin-icon" aria-hidden="true">
+                    {trashFeedback === 'success' ? '✓' : trashFeedback === 'error' ? '⚠' : '🗑'}
+                  </span>
+                  <div className="trash-bin-text">
+                    <span className="trash-bin-label">Drop here to delete</span>
+                    <span className="trash-bin-sub">
+                      {trashFeedback === 'success'
+                        ? 'Task deleted successfully'
+                        : trashFeedback === 'error'
+                          ? 'Could not delete task'
+                          : isTrashOver && draggedTask
+                            ? `Release to delete “${draggedTask.task}”`
+                            : draggedTask
+                              ? `Drag here to remove “${draggedTask.task}”`
+                              : 'Drag any task here to delete'}
+                    </span>
+                  </div>
+                </div>
+              </section>
 
               {/* Dedicated Unscheduled Tasks Panel */}
               <div className="panel unscheduled-panel">

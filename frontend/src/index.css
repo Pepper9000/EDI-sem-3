@@ -366,22 +366,23 @@ h1 { margin-bottom: 6px; font-size: 31px; line-height: 1.15; font-weight: 640; }
 .calendar-trash-bin {
   display: flex;
   align-items: center;
-  justify-content: center;
-  margin-bottom: 16px;
-  padding: 10px 18px;
-  background: rgba(14, 35, 44, 0.45);
+  justify-content: flex-start;
+  padding: 10px 14px;
+  background: rgba(14, 35, 44, 0.55);
   border: 1px dashed rgba(143, 166, 174, 0.25);
   border-radius: 8px;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   color: var(--secondary);
   user-select: none;
   min-height: 48px;
+  width: 100%;
 }
 
 .calendar-trash-bin .trash-bin-content {
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
   pointer-events: none;
 }
 
@@ -391,8 +392,9 @@ h1 { margin-bottom: 6px; font-size: 31px; line-height: 1.15; font-weight: 640; }
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
   border-radius: 6px;
   background: rgba(7, 21, 28, 0.4);
   transition: all 0.2s ease;
@@ -400,22 +402,28 @@ h1 { margin-bottom: 6px; font-size: 31px; line-height: 1.15; font-weight: 640; }
 
 .calendar-trash-bin .trash-bin-text {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
 }
 
 .calendar-trash-bin .trash-bin-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text);
+  white-space: nowrap;
 }
 
 .calendar-trash-bin .trash-bin-sub {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
   transition: color 0.15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* While any task is actively dragging */
