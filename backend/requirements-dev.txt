@@ -1,0 +1,5 @@
+# Development and testing dependencies for DayPlan backend
+-r requirements.txt
+pytest>=8.0.0
+httpx>=0.27.0
+httpx2>=2.0.0
