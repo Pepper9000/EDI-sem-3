@@ -1,15 +1,15 @@
 from sklearn.linear_model import LogisticRegression
 
-from services.state import feedback_data
+from services import state as state_module
 
 
 def train_model():
-    if len(feedback_data) < 4:
+    if len(state_module.feedback_data) < 4:
         return None
 
     X = []
     y = []
-    for feedback in feedback_data:
+    for feedback in state_module.feedback_data:
         X.append([feedback.energy, feedback.difficulty, feedback.duration])
         y.append(1 if feedback.completed else 0)
 

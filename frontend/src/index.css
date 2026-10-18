@@ -362,6 +362,150 @@ h1 { margin-bottom: 6px; font-size: 31px; line-height: 1.15; font-weight: 640; }
   gap: 12px;
 }
 
+/* Calendar Trash Bin Drop Target */
+.calendar-trash-bin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  padding: 10px 18px;
+  background: rgba(14, 35, 44, 0.45);
+  border: 1px dashed rgba(143, 166, 174, 0.25);
+  border-radius: 8px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  color: var(--secondary);
+  user-select: none;
+  min-height: 48px;
+}
+
+.calendar-trash-bin .trash-bin-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.calendar-trash-bin .trash-bin-icon {
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(7, 21, 28, 0.4);
+  transition: all 0.2s ease;
+}
+
+.calendar-trash-bin .trash-bin-text {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.calendar-trash-bin .trash-bin-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.calendar-trash-bin .trash-bin-sub {
+  font-size: 11px;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+
+/* While any task is actively dragging */
+.calendar-trash-bin.is-dragging {
+  background: rgba(233, 106, 122, 0.08);
+  border-color: rgba(233, 106, 122, 0.5);
+  border-style: dashed;
+  color: #ffb9c2;
+  box-shadow: 0 0 12px rgba(233, 106, 122, 0.15);
+  transform: translateY(-1px);
+}
+
+.calendar-trash-bin.is-dragging .trash-bin-icon {
+  background: rgba(233, 106, 122, 0.15);
+  color: var(--danger);
+  transform: scale(1.1);
+}
+
+.calendar-trash-bin.is-dragging .trash-bin-label {
+  color: #ffb9c2;
+}
+
+.calendar-trash-bin.is-dragging .trash-bin-sub {
+  color: #ffb9c2;
+}
+
+/* While hovered directly over trash bin */
+.calendar-trash-bin.is-hovered {
+  background: rgba(233, 106, 122, 0.22);
+  border-color: var(--danger);
+  border-style: solid;
+  border-width: 2px;
+  box-shadow: 0 0 20px rgba(233, 106, 122, 0.4);
+  transform: scale(1.01);
+}
+
+.calendar-trash-bin.is-hovered .trash-bin-icon {
+  background: var(--danger);
+  color: #ffffff;
+  transform: scale(1.25) rotate(-8deg);
+}
+
+.calendar-trash-bin.is-hovered .trash-bin-label {
+  color: #ffffff;
+}
+
+.calendar-trash-bin.is-hovered .trash-bin-sub {
+  color: #ffe4e6;
+  font-weight: 600;
+}
+
+/* Deletion feedback: success */
+.calendar-trash-bin.feedback-success {
+  background: rgba(24, 214, 193, 0.16);
+  border-color: var(--cyan);
+  border-style: solid;
+  box-shadow: 0 0 16px rgba(24, 214, 193, 0.3);
+}
+
+.calendar-trash-bin.feedback-success .trash-bin-icon {
+  background: var(--cyan);
+  color: #06211f;
+  font-weight: 800;
+}
+
+.calendar-trash-bin.feedback-success .trash-bin-label,
+.calendar-trash-bin.feedback-success .trash-bin-sub {
+  color: var(--cyan);
+  font-weight: 600;
+}
+
+/* Deletion feedback: error */
+.calendar-trash-bin.feedback-error {
+  background: rgba(233, 106, 122, 0.25);
+  border-color: var(--danger);
+  border-style: solid;
+  box-shadow: 0 0 16px rgba(233, 106, 122, 0.4);
+}
+
+.calendar-trash-bin.feedback-error .trash-bin-icon {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.calendar-trash-bin.feedback-error .trash-bin-label,
+.calendar-trash-bin.feedback-error .trash-bin-sub {
+  color: #ffb9c2;
+  font-weight: 600;
+}
+
 .calendar-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
@@ -709,6 +853,57 @@ h1 { margin-bottom: 6px; font-size: 31px; line-height: 1.15; font-weight: 640; }
   letter-spacing: 0.05em;
 }
 
+.details-explanation {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: rgba(24, 214, 193, 0.06);
+  border: 1px solid rgba(24, 214, 193, 0.25);
+  border-radius: 6px;
+}
+
+.details-explanation .explanation-heading {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 3px;
+}
+
+.details-explanation .explanation-text {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.timeline-explanation {
+  margin-top: 7px;
+  margin-bottom: 6px;
+  padding: 6px 10px;
+  background: rgba(24, 214, 193, 0.05);
+  border-left: 2px solid var(--cyan);
+  border-radius: 4px;
+}
+
+.explanation-title {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+}
+
+.explanation-copy {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #d6e8ec;
+}
+
 .reschedule-form {
   display: grid;
   gap: 10px;
@@ -839,4 +1034,6 @@ h1 { margin-bottom: 6px; font-size: 31px; line-height: 1.15; font-weight: 640; }
   .day-selector { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .weekly-grid { grid-template-columns: 1fr; }
   .calendar-actions { flex-direction: column; align-items: flex-start; }
+  .calendar-trash-bin { padding: 8px 12px; }
+  .calendar-trash-bin .trash-bin-text { flex-direction: column; gap: 2px; align-items: flex-start; }
 }

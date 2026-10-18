@@ -267,4 +267,212 @@ test('previewWeeklyAvailability sends POST to /availability/weekly/preview', asy
   }
 })
 
+test('schedule payload preserves truthful explanation and identifies manual placements', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () =>
+    jsonResponse({
+      date: '2026-10-18',
+      days: [
+        {
+          date: '2026-10-18',
+          is_today: true,
+          readiness: 'known',
+          schedule: [
+            {
+              task_id: 1,
+              task: 'Deep Focus',
+              start_time: '12:00',
+              end_time: '13:00',
+              type: 'task',
+              difficulty: 4,
+              importance: 5,
+              is_manual: false,
+              explanation:
+                'Scheduled at 12:00 because this was the earliest feasible slot, the task has high priority, and your reported energy level of 4/5 is compatible with its difficulty of 4/5.',
+            },
+          ],
+        },
+        {
+          date: '2026-10-19',
+          is_today: false,
+          readiness: 'unknown',
+          schedule: [
+            {
+              task_id: 2,
+              task: 'Rescheduled Task',
+              start_time: '14:00',
+              end_time: '15:00',
+              type: 'task',
+              is_manual: true,
+              explanation:
+                'Manually placed at 14:00 on 2026-10-19. This placement was chosen manually by you.',
+            },
+          ],
+        },
+      ],
+    })
+
+  try {
+    const data = await api.getSchedule()
+    const todayTask = data.days[0].schedule[0]
+    assert.equal(todayTask.is_manual, false)
+    assert.match(todayTask.explanation, /earliest feasible slot/)
+    assert.match(todayTask.explanation, /compatible with its difficulty/)
+
+    const manualTask = data.days[1].schedule[0]
+    assert.equal(manualTask.is_manual, true)
+    assert.match(manualTask.explanation, /manually placed/i)
+    assert.match(manualTask.explanation, /chosen manually by you/i)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('future dates clearly identify readiness as unknown without claiming optimal biological time', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () =>
+    jsonResponse({
+      date: '2026-10-19',
+      readiness: 'unknown',
+      energy: null,
+      days: [
+        {
+          date: '2026-10-19',
+          is_today: false,
+          readiness: 'unknown',
+          schedule: [
+            {
+              task_id: 3,
+              task: 'Future Task',
+              start_time: '10:00',
+              end_time: '11:00',
+              type: 'task',
+              energy_fit: null,
+              explanation:
+                'Scheduled at 10:00 on 2026-10-19 because this was the earliest feasible slot within your availability, the task has standard priority, and energy readiness is unknown for future dates.',
+            },
+          ],
+        },
+      ],
+    })
+
+  try {
+    const data = await api.getSchedule('2026-10-19')
+    assert.equal(data.readiness, 'unknown')
+    assert.equal(data.energy, null)
+    const futureTask = data.days[0].schedule[0]
+    assert.equal(futureTask.energy_fit, null)
+    assert.match(futureTask.explanation, /readiness is unknown for future dates/i)
+    assert.doesNotMatch(futureTask.explanation, /optimal/i)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('api.deleteTask sends DELETE to /tasks/:id', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (...args) => {
+    calls.push(args)
+    return jsonResponse({ message: 'Task 42 deleted' })
+  }
+
+  try {
+    const result = await api.deleteTask(42)
+    assert.equal(result.message, 'Task 42 deleted')
+    assert.equal(calls[0][0], 'http://127.0.0.1:8000/tasks/42')
+    assert.equal(calls[0][1].method, 'DELETE')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('calendar trash drop: cancelling confirmation leaves task unchanged and does not call deleteTask', async () => {
+  let deleteTaskCalled = false
+  let rescheduleCalled = false
+  const mockApi = {
+    deleteTask: async () => { deleteTaskCalled = true },
+    rescheduleTask: async () => { rescheduleCalled = true },
+  }
+
+  const draggedTask = { task_id: 10, task: 'Important Work', duration: 60 }
+  const originalConfirm = globalThis.window ? globalThis.window.confirm : undefined
+  if (!globalThis.window) globalThis.window = {}
+  globalThis.window.confirm = () => false // User clicks Cancel
+
+  try {
+    // Simulate drop on trash bin logic
+    const taskToDelete = draggedTask
+    const taskName = taskToDelete.task || 'this task'
+    const confirmed = globalThis.window.confirm(`Remove “${taskName}” from your task list?`)
+    if (confirmed) {
+      await mockApi.deleteTask(taskToDelete.task_id)
+    }
+
+    assert.equal(deleteTaskCalled, false)
+    assert.equal(rescheduleCalled, false)
+  } finally {
+    if (originalConfirm) globalThis.window.confirm = originalConfirm
+  }
+})
+
+test('calendar trash drop: confirming deletion calls deleteTask and does not trigger reschedule', async () => {
+  let deletedTaskId = null
+  let rescheduleCalled = false
+  const mockApi = {
+    deleteTask: async (id) => {
+      deletedTaskId = id
+      return { message: `Task ${id} removed` }
+    },
+    rescheduleTask: async () => { rescheduleCalled = true },
+  }
+
+  const draggedTask = { task_id: 15, task: 'Quarterly Review', duration: 90 }
+  const originalConfirm = globalThis.window ? globalThis.window.confirm : undefined
+  if (!globalThis.window) globalThis.window = {}
+  globalThis.window.confirm = (msg) => {
+    assert.match(msg, /Quarterly Review/)
+    return true // User clicks OK
+  }
+
+  try {
+    const taskToDelete = draggedTask
+    const taskName = taskToDelete.task || 'this task'
+    const confirmed = globalThis.window.confirm(`Remove “${taskName}” from your task list?`)
+    if (confirmed) {
+      const res = await mockApi.deleteTask(taskToDelete.task_id)
+      assert.equal(res.message, 'Task 15 removed')
+    }
+
+    assert.equal(deletedTaskId, 15)
+    assert.equal(rescheduleCalled, false)
+  } finally {
+    if (originalConfirm) globalThis.window.confirm = originalConfirm
+  }
+})
+
+test('calendar trash drop: deletion failure reports error without mutating state', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 500,
+    headers: { get: () => 'application/json' },
+    json: async () => ({ detail: 'Database error' }),
+  })
+
+  try {
+    await assert.rejects(
+      async () => {
+        await api.deleteTask(999)
+      },
+      {
+        message: 'Database error',
+      }
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+
 

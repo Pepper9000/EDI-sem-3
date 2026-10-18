@@ -111,6 +111,8 @@ function App() {
   const [rescheduleForm, setRescheduleForm] = useState({ date: pageDate, start_time: '09:00' })
   const [draggedTask, setDraggedTask] = useState(null)
   const [dragOverDate, setDragOverDate] = useState(null)
+  const [isTrashOver, setIsTrashOver] = useState(false)
+  const [trashFeedback, setTrashFeedback] = useState(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [statusMessage, setStatusMessage] = useState('Loading seven-day plan…')
@@ -362,9 +364,11 @@ function App() {
         ? `${unscheduledEntries.length} task${unscheduledEntries.length === 1 ? '' : 's'} could not fit on this date.`
         : unusedMinutes <= 60
           ? 'You have limited unused availability on this date; keep new tasks short.'
-          : hardestTask && hardestTask.difficulty >= currentEnergy
-            ? `Estimated energy currently fits higher-difficulty work such as ${hardestTask.name}.`
-            : `Estimated energy is ${currentEnergy}/5; a task near that difficulty may fit this period.`
+          : !activeIsToday
+            ? 'Energy readiness is unknown for future dates; tasks are placed based on availability and priority.'
+            : hardestTask && hardestTask.difficulty >= currentEnergy
+              ? `Estimated energy currently fits higher-difficulty work such as ${hardestTask.name}.`
+              : `Estimated energy is ${currentEnergy}/5; a task near that difficulty may fit this period.`
 
   const onSelectDate = (newDate) => {
     setSelectedDate(newDate)
@@ -385,6 +389,8 @@ function App() {
       date: date || task.date || null,
       start_time: task.start_time || null,
       end_time: task.end_time || null,
+      explanation: task.explanation || null,
+      is_manual: task.is_manual ?? false,
     }
     setSelectedTaskDetails(detail)
     setRescheduleForm({
@@ -428,6 +434,70 @@ function App() {
     if (dragOverDate !== targetDate) {
       setDragOverDate(targetDate)
     }
+  }
+
+  const handleDragEnd = () => {
+    setDraggedTask(null)
+    setDragOverDate(null)
+    setIsTrashOver(false)
+  }
+
+  const handleTrashDragOver = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'move'
+    if (!isTrashOver) {
+      setIsTrashOver(true)
+    }
+  }
+
+  const handleTrashDragLeave = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.currentTarget.contains(event.relatedTarget)) return
+    setIsTrashOver(false)
+  }
+
+  const handleTrashDrop = async (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setIsTrashOver(false)
+
+    let taskToDelete = draggedTask
+    if (!taskToDelete) {
+      try {
+        const dataStr = event.dataTransfer.getData('text/plain')
+        if (dataStr) taskToDelete = JSON.parse(dataStr)
+      } catch {
+        // ignore parse error
+      }
+    }
+    setDraggedTask(null)
+    setDragOverDate(null)
+    if (!taskToDelete?.task_id) return
+
+    const taskName = taskToDelete.task || 'this task'
+    const confirmed = window.confirm(`Remove “${taskName}” from your task list?`)
+    if (!confirmed) {
+      return
+    }
+
+    await runAction(`delete-task-${taskToDelete.task_id}`, async () => {
+      try {
+        const result = await api.deleteTask(taskToDelete.task_id)
+        if (selectedTaskDetails?.task_id === taskToDelete.task_id) {
+          setSelectedTaskDetails(null)
+        }
+        setTrashFeedback('success')
+        setStatusMessage(result.message)
+        setTimeout(() => setTrashFeedback(null), 2500)
+        await refreshDashboard()
+      } catch (deleteError) {
+        setTrashFeedback('error')
+        setTimeout(() => setTrashFeedback(null), 3000)
+        throw deleteError
+      }
+    })
   }
 
   const handleDragLeave = () => {
@@ -549,9 +619,9 @@ function App() {
 
           <section className="kpi-grid" aria-label="Day at a glance">
             <article className="kpi-card">
-              <span className="kpi-label">ESTIMATED ENERGY</span>
-              <strong>{currentEnergy}<small> / 5</small></strong>
-              <span className="kpi-foot">Manual input {biologicalState?.manual_energy ?? '—'}/5</span>
+              <span className="kpi-label">{activeIsToday ? 'ESTIMATED ENERGY' : 'ESTIMATED ENERGY (TODAY)'}</span>
+              <strong>{activeIsToday ? currentEnergy : '—'}<small>{activeIsToday ? ' / 5' : ' (unknown)'}</small></strong>
+              <span className="kpi-foot">{activeIsToday ? `Manual input ${biologicalState?.manual_energy ?? '—'}/5` : 'Future readiness unknown'}</span>
             </article>
             <article className="kpi-card">
               <span className="kpi-label">TASKS SCHEDULED ({selectedDay.short_date || activeDate})</span>
@@ -948,6 +1018,12 @@ function App() {
                           {completionStatusFor(entry, feedback) ? <span>Feedback: {completionStatusFor(entry, feedback).replace('_', ' ')}</span> : null}
                         </div>
                       ) : null}
+                      {entry.explanation ? (
+                        <div className="timeline-explanation">
+                          <strong className="explanation-title">Why this time?</strong>
+                          <p className="explanation-copy">{entry.explanation}</p>
+                        </div>
+                      ) : null}
                       {Array.isArray(entry.reason) ? (
                         <p className="reason-text">{entry.reason.join(' · ')}</p>
                       ) : entry.reason ? (
@@ -1035,6 +1111,36 @@ function App() {
             </div>
           </section>
           {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
+          {/* Calendar Trash Bin Drop Target */}
+          <section
+            className={`calendar-trash-bin ${draggedTask ? 'is-dragging' : ''} ${isTrashOver ? 'is-hovered' : ''} ${trashFeedback ? `feedback-${trashFeedback}` : ''}`}
+            onDragOver={handleTrashDragOver}
+            onDragLeave={handleTrashDragLeave}
+            onDrop={handleTrashDrop}
+            aria-label="Calendar trash bin drop zone"
+            role="region"
+          >
+            <div className="trash-bin-content">
+              <span className="trash-bin-icon" aria-hidden="true">
+                {trashFeedback === 'success' ? '✓' : trashFeedback === 'error' ? '⚠' : '🗑'}
+              </span>
+              <div className="trash-bin-text">
+                <span className="trash-bin-label">Drop here to delete</span>
+                <span className="trash-bin-sub">
+                  {trashFeedback === 'success'
+                    ? 'Task deleted successfully'
+                    : trashFeedback === 'error'
+                      ? 'Could not delete task'
+                      : isTrashOver && draggedTask
+                        ? `Release to delete “${draggedTask.task}”`
+                        : draggedTask
+                          ? `Drag here to remove “${draggedTask.task}”`
+                          : 'Drag any scheduled or unplaced task here to delete it'}
+                </span>
+              </div>
+            </div>
+          </section>
 
           <div className="calendar-layout">
             {/* Main Time-Grid */}
@@ -1149,6 +1255,7 @@ function App() {
                               style={{ top: `${Math.max(0, top)}px`, height: `${height}px` }}
                               draggable={!busy}
                               onDragStart={(e) => handleDragStart(e, task, day.date)}
+                              onDragEnd={handleDragEnd}
                               onClick={() => openTaskDetails(task, day.date)}
                               role="button"
                               tabIndex={0}
@@ -1206,9 +1313,16 @@ function App() {
                     <div><span>Scheduled Time</span><strong>{selectedTaskDetails.start_time ? `${selectedTaskDetails.start_time} – ${selectedTaskDetails.end_time}` : 'No slot'}</strong></div>
                   </div>
 
+                  {selectedTaskDetails.explanation ? (
+                    <div className="details-explanation">
+                      <span className="explanation-heading">Why this time?</span>
+                      <p className="explanation-text">{selectedTaskDetails.explanation}</p>
+                    </div>
+                  ) : null}
+
                   {selectedTaskDetails.reason ? (
                     <div className="details-reason">
-                      <span>Status / Reason:</span>
+                      <span>Status / Factors:</span>
                       <p className="reason-text">
                         {Array.isArray(selectedTaskDetails.reason)
                           ? selectedTaskDetails.reason.join(' · ')
@@ -1278,6 +1392,7 @@ function App() {
                           className={`unscheduled-card ${isSelected ? 'selected' : ''}`}
                           draggable={!busy}
                           onDragStart={(e) => handleDragStart(e, item, null)}
+                          onDragEnd={handleDragEnd}
                           onClick={() => openTaskDetails(item, null)}
                           role="button"
                           tabIndex={0}

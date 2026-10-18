@@ -83,10 +83,81 @@ def validate_task_reschedule(
     return True, None, start_min, end_min
 
 
+def build_task_explanation(
+    task: state_module.Task,
+    target_date: date,
+    start_time: str,
+    is_manual: bool,
+    user_energy: int,
+    effective_energy: int,
+    urgency: int,
+    probability: float,
+    is_model_trained: bool,
+    is_today: bool,
+    has_busy_avoided: bool = False,
+) -> str:
+    if is_manual:
+        return f"Manually placed at {start_time} on {target_date}. This placement was chosen manually by you."
+
+    if not is_today:
+        parts = [f"Scheduled at {start_time} on {target_date} because this was the earliest feasible slot within your availability"]
+        if urgency >= 4 and task.deadline:
+            parts.append(f"the task is approaching its deadline ({task.deadline})")
+        elif task.importance >= 4:
+            parts.append("the task has high priority")
+        elif task.importance <= 2:
+            parts.append("the task has lower priority")
+        else:
+            parts.append("the task has standard priority")
+        parts_str = ", ".join(parts)
+        return f"{parts_str}, and energy readiness is unknown for future dates."
+
+    # Today
+    slot_desc = f"Scheduled at {start_time} because this was the earliest feasible slot"
+    if has_busy_avoided:
+        slot_desc += " avoiding existing busy blocks"
+
+    factors = [slot_desc]
+
+    if urgency >= 4:
+        if task.deadline:
+            factors.append(f"the task is urgent (due {task.deadline})")
+        else:
+            factors.append("the task has urgent priority")
+    elif task.importance >= 4:
+        factors.append("the task has high priority")
+    elif task.importance <= 2:
+        factors.append("the task has lower priority")
+    else:
+        factors.append("the task has standard priority")
+
+    # Energy compatibility factor
+    if abs(task.difficulty - user_energy) <= 1:
+        factors.append(f"your reported energy level of {user_energy}/5 is compatible with its difficulty of {task.difficulty}/5")
+    elif user_energy <= 2 and task.difficulty >= 4:
+        factors.append(f"scheduled to meet deadline and planning constraints despite lower reported energy ({user_energy}/5 vs. difficulty {task.difficulty}/5)")
+    elif user_energy >= 4 and task.difficulty <= 2:
+        factors.append(f"your reported energy level of {user_energy}/5 can accommodate this lighter task (difficulty {task.difficulty}/5)")
+    else:
+        factors.append(f"your reported energy level of {user_energy}/5 aligns with its difficulty of {task.difficulty}/5")
+
+    explanation = ", and ".join([", ".join(factors[:-1]), factors[-1]]) if len(factors) > 1 else factors[0]
+    explanation += "."
+
+    if is_model_trained:
+        if probability >= 0.7:
+            explanation += f" Past feedback indicates a high completion likelihood ({int(round(probability * 100))}%)."
+        elif probability < 0.4:
+            explanation += f" Past feedback suggests completion may be challenging ({int(round(probability * 100))}% likelihood)."
+
+    return explanation
+
+
 def generate_schedule_payload(target_date_str: str | None = None) -> dict:
     planning_start = date.today()
     horizon_dates = [planning_start + timedelta(days=i) for i in range(7)]
     effective_energy = state_module.get_effective_energy()
+    user_energy = state_module.current_energy
     cutoff = state_module.time_to_minutes(state_module.end_of_day)
 
     target_date = planning_start
@@ -106,8 +177,10 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
             "difficulty": task.difficulty,
             "importance": task.importance,
             "duration": task.duration,
+            "deadline": str(task.deadline) if task.deadline else None,
             "type": "unscheduled",
             "reason": "No availability windows have been configured yet.",
+            "explanation": "No availability windows have been configured yet.",
         } for task in state_module.tasks]
 
         days = []
@@ -118,6 +191,7 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
                 "day_name": d.strftime("%A"),
                 "short_date": d.strftime("%b %d"),
                 "is_today": d == planning_start,
+                "readiness": "known" if d == planning_start else "unknown",
                 "available_minutes": 0,
                 "scheduled_minutes": 0,
                 "unused_minutes": 0,
@@ -138,12 +212,15 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
 
         target_day = next(day for day in days if day["date"] == str(target_date))
 
+        is_target_today = (target_date == planning_start)
         return {
             "date": str(target_date),
-            "energy": state_module.current_energy,
-            "circadian_energy": state_module.circadian_energy(),
-            "wearable_energy": state_module.wearable_energy(),
-            "effective_energy": effective_energy,
+            "energy": state_module.current_energy if is_target_today else None,
+            "circadian_energy": state_module.circadian_energy() if is_target_today else None,
+            "wearable_energy": state_module.wearable_energy() if is_target_today else None,
+            "effective_energy": effective_energy if is_target_today else None,
+            "readiness": "known" if is_target_today else "unknown",
+            "current_energy": state_module.current_energy,
             "end_of_day": state_module.end_of_day,
             "available_minutes": 0,
             "scheduled_minutes": 0,
@@ -160,22 +237,36 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
         }
 
     model = train_model()
+    is_model_trained = model is not None
     scored_tasks = []
 
     for task in state_module.tasks:
-        if model is not None:
+        if is_model_trained:
             probability = model.predict_proba([[effective_energy, task.difficulty, task.duration]])[0][1]
         else:
             probability = 0.5
 
         urgency = state_module.urgency_score(task, planning_start)
-        energy_fit = state_module.energy_fit_score(task, effective_energy)
+        energy_fit = state_module.energy_fit_score(task, user_energy)
+
+        # Energy-difficulty alignment preference
+        if user_energy >= 4:
+            # High energy: prefer demanding tasks
+            energy_bias = (task.difficulty - 3) * 0.75
+        elif user_energy <= 2:
+            # Low energy: prefer less demanding tasks
+            energy_bias = (3 - task.difficulty) * 0.75
+        else:
+            energy_bias = 0.0
+
+        model_term = probability * 0.5 if is_model_trained else 0.0
+
         score = (
-            probability * 0.30
-            + energy_fit * 0.30
-            + task.importance * 1.2
-            + urgency * 0.75
-            + task.difficulty * 0.45
+            model_term
+            + energy_fit * 0.60
+            + energy_bias
+            + task.importance * 1.5
+            + urgency * 2.5
         )
         scored_tasks.append({
             "task": task,
@@ -218,7 +309,17 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
 
         day_reserved[p_date].append((p_start, p_end))
         task_urgency = state_module.urgency_score(task, planning_start)
-        reason = state_module.build_reason_list(task, effective_energy, task_urgency, 0.5)
+        is_today = (p_date == planning_start)
+
+        explanation = f"Manually placed at {p_start_str} on {p_date}. This placement was chosen manually by you."
+        reason = state_module.build_reason_list(
+            task=task,
+            energy_level=user_energy if is_today else None,
+            urgency=task_urgency,
+            probability=0.5,
+            is_today=is_today,
+            is_manual=True,
+        )
 
         day_scheduled_tasks[p_date].append({
             "task_id": task.id,
@@ -226,13 +327,15 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
             "difficulty": task.difficulty,
             "importance": task.importance,
             "duration": task.duration,
+            "deadline": str(task.deadline) if task.deadline else None,
             "start_time": p_start_str,
             "end_time": state_module.minutes_to_time(p_end),
             "date": str(p_date),
             "type": "task",
-            "energy_fit": state_module.energy_fit_score(task, effective_energy),
+            "energy_fit": state_module.energy_fit_score(task, user_energy) if is_today else None,
             "urgency": task_urgency,
             "predicted_success": 0.5,
+            "explanation": explanation,
             "reason": reason,
             "start_minute": p_start,
             "end_minute": p_end,
@@ -258,7 +361,35 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
                 day_reserved[candidate_date].append((slot, slot + task.duration))
                 start_time = state_module.minutes_to_time(slot)
                 end_time = state_module.minutes_to_time(slot + task.duration)
-                reason = state_module.build_reason_list(task, effective_energy, item["urgency"], item["probability"])
+                is_today = (candidate_date == planning_start)
+
+                has_busy_avoided = any(
+                    block.type == "busy" and block.date == candidate_date
+                    for block in state_module.time_blocks
+                )
+
+                explanation = build_task_explanation(
+                    task=task,
+                    target_date=candidate_date,
+                    start_time=start_time,
+                    is_manual=False,
+                    user_energy=user_energy,
+                    effective_energy=effective_energy,
+                    urgency=item["urgency"],
+                    probability=item["probability"],
+                    is_model_trained=is_model_trained,
+                    is_today=is_today,
+                    has_busy_avoided=has_busy_avoided,
+                )
+
+                reason = state_module.build_reason_list(
+                    task=task,
+                    energy_level=user_energy if is_today else None,
+                    urgency=item["urgency"],
+                    probability=item["probability"] if (is_today and is_model_trained) else 0.5,
+                    is_today=is_today,
+                    is_manual=False,
+                )
 
                 day_scheduled_tasks[candidate_date].append({
                     "task_id": task.id,
@@ -266,16 +397,19 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
                     "difficulty": task.difficulty,
                     "importance": task.importance,
                     "duration": task.duration,
+                    "deadline": str(task.deadline) if task.deadline else None,
                     "start_time": start_time,
                     "end_time": end_time,
                     "date": str(candidate_date),
                     "type": "task",
-                    "energy_fit": item["energy_fit"],
+                    "energy_fit": item["energy_fit"] if is_today else None,
                     "urgency": item["urgency"],
-                    "predicted_success": round(item["probability"], 2),
+                    "predicted_success": round(item["probability"], 2) if (is_today and is_model_trained) else None,
+                    "explanation": explanation,
                     "reason": reason,
                     "start_minute": slot,
                     "end_minute": slot + task.duration,
+                    "is_manual": False,
                 })
                 placed = True
                 break
@@ -300,8 +434,10 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
                 "difficulty": task.difficulty,
                 "importance": task.importance,
                 "duration": task.duration,
+                "deadline": str(task.deadline) if task.deadline else None,
                 "type": "unscheduled",
                 "reason": reason,
+                "explanation": reason,
             }
             unscheduled_tasks.append(unplaced_entry)
             unscheduled_by_date[target_day_for_unplaced].append(unplaced_entry)
@@ -329,6 +465,7 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
                             "date": str(d),
                             "type": "break",
                             "reason": ["15-minute recovery break between work blocks"],
+                            "explanation": "15-minute recovery break between work blocks.",
                         })
             final_day_schedule.append(item)
 
@@ -349,6 +486,7 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
             "day_name": d.strftime("%A"),
             "short_date": d.strftime("%b %d"),
             "is_today": d == planning_start,
+            "readiness": "known" if d == planning_start else "unknown",
             "available_minutes": available_cap,
             "scheduled_minutes": scheduled_mins,
             "unused_minutes": unused_mins,
@@ -371,6 +509,7 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
                     "duration": t["duration"],
                     "start_time": t["start_time"],
                     "end_time": t["end_time"],
+                    "explanation": t.get("explanation"),
                 }
                 for t in final_day_schedule
                 if t.get("type") == "task"
@@ -379,12 +518,15 @@ def generate_schedule_payload(target_date_str: str | None = None) -> dict:
 
     target_day = next((day for day in days if day["date"] == str(target_date)), days[0])
 
+    is_target_today = (target_date == planning_start)
     return {
         "date": str(target_date),
-        "energy": state_module.current_energy,
-        "circadian_energy": state_module.circadian_energy(),
-        "wearable_energy": state_module.wearable_energy(),
-        "effective_energy": effective_energy,
+        "energy": state_module.current_energy if is_target_today else None,
+        "circadian_energy": state_module.circadian_energy() if is_target_today else None,
+        "wearable_energy": state_module.wearable_energy() if is_target_today else None,
+        "effective_energy": effective_energy if is_target_today else None,
+        "readiness": "known" if is_target_today else "unknown",
+        "current_energy": state_module.current_energy,
         "end_of_day": state_module.end_of_day,
         "available_minutes": target_day["available_minutes"],
         "scheduled_minutes": target_day["scheduled_minutes"],

@@ -1202,4 +1202,483 @@ def test_weekly_availability_database_error_handling(monkeypatch):
     assert len(state_module.availability_windows) == initial_len
 
 
+def test_high_energy_makes_demanding_tasks_preferable_when_constraints_permit():
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    client.delete("/tasks")
+    client.delete("/availability")
+    client.delete("/time-blocks")
+
+    # Set user energy to 5 (high)
+    client.post("/energy", json={"level": 5})
+
+    # Task A: Demanding (difficulty 5, duration 60, importance 3)
+    r1 = client.post("/tasks", json={
+        "name": "Demanding Task",
+        "difficulty": 5,
+        "duration": 60,
+        "importance": 3,
+    })
+    t1_id = r1.json()["task"]["id"]
+
+    # Task B: Lighter (difficulty 1, duration 60, importance 3)
+    r2 = client.post("/tasks", json={
+        "name": "Lighter Task",
+        "difficulty": 1,
+        "duration": 60,
+        "importance": 3,
+    })
+    t2_id = r2.json()["task"]["id"]
+
+    # Availability: 1 hour today, 1 hour tomorrow
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "09:00",
+        "end_time": "10:00",
+    })
+    client.post("/availability", json={
+        "date": tomorrow.isoformat(),
+        "start_time": "09:00",
+        "end_time": "10:00",
+    })
+
+    sched = client.get("/schedule").json()
+    today_tasks = [t for t in sched["schedule"] if t.get("type") == "task"]
+    assert len(today_tasks) == 1
+    assert today_tasks[0]["task_id"] == t1_id
+    assert today_tasks[0]["task"] == "Demanding Task"
+    assert "energy level of 5/5" in today_tasks[0]["explanation"]
+    assert "difficulty 5/5" in today_tasks[0]["explanation"] or "difficulty of 5/5" in today_tasks[0]["explanation"]
+
+    tomorrow_sched = client.get(f"/schedule?date={tomorrow.isoformat()}").json()
+    tomorrow_tasks = [t for t in tomorrow_sched["schedule"] if t.get("type") == "task"]
+    assert len(tomorrow_tasks) == 1
+    assert tomorrow_tasks[0]["task_id"] == t2_id
+
+
+def test_low_energy_favors_less_demanding_tasks_where_feasible():
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    client.delete("/tasks")
+    client.delete("/availability")
+    client.delete("/time-blocks")
+
+    # Set user energy to 1 (low)
+    client.post("/energy", json={"level": 1})
+
+    # Task A: Demanding (difficulty 5, duration 60, importance 3)
+    r1 = client.post("/tasks", json={
+        "name": "Demanding Task",
+        "difficulty": 5,
+        "duration": 60,
+        "importance": 3,
+    })
+    t1_id = r1.json()["task"]["id"]
+
+    # Task B: Lighter (difficulty 1, duration 60, importance 3)
+    r2 = client.post("/tasks", json={
+        "name": "Lighter Task",
+        "difficulty": 1,
+        "duration": 60,
+        "importance": 3,
+    })
+    t2_id = r2.json()["task"]["id"]
+
+    # Availability: 1 hour today, 1 hour tomorrow
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "09:00",
+        "end_time": "10:00",
+    })
+    client.post("/availability", json={
+        "date": tomorrow.isoformat(),
+        "start_time": "09:00",
+        "end_time": "10:00",
+    })
+
+    sched = client.get("/schedule").json()
+    today_tasks = [t for t in sched["schedule"] if t.get("type") == "task"]
+    assert len(today_tasks) == 1
+    assert today_tasks[0]["task_id"] == t2_id
+    assert today_tasks[0]["task"] == "Lighter Task"
+    assert "energy level of 1/5" in today_tasks[0]["explanation"]
+    assert "difficulty 1/5" in today_tasks[0]["explanation"] or "difficulty of 1/5" in today_tasks[0]["explanation"]
+
+    tomorrow_sched = client.get(f"/schedule?date={tomorrow.isoformat()}").json()
+    tomorrow_tasks = [t for t in tomorrow_sched["schedule"] if t.get("type") == "task"]
+    assert len(tomorrow_tasks) == 1
+    assert tomorrow_tasks[0]["task_id"] == t1_id
+
+
+def test_urgent_deadlines_and_hard_constraints_never_violated_for_energy_matching():
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    client.delete("/tasks")
+    client.delete("/availability")
+    client.delete("/time-blocks")
+
+    # Set user energy to 1 (low)
+    client.post("/energy", json={"level": 1})
+
+    # Demanding task with deadline TODAY
+    r1 = client.post("/tasks", json={
+        "name": "Urgent Hard Task",
+        "difficulty": 5,
+        "duration": 60,
+        "importance": 3,
+        "deadline": today.isoformat(),
+    })
+    t1_id = r1.json()["task"]["id"]
+
+    # Easy non-urgent task with deadline in 3 days
+    r2 = client.post("/tasks", json={
+        "name": "Non-urgent Easy Task",
+        "difficulty": 1,
+        "duration": 60,
+        "importance": 3,
+        "deadline": (today + timedelta(days=3)).isoformat(),
+    })
+    t2_id = r2.json()["task"]["id"]
+
+    # Only 1 hour available today, 1 hour tomorrow
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "09:00",
+        "end_time": "10:00",
+    })
+    client.post("/availability", json={
+        "date": tomorrow.isoformat(),
+        "start_time": "09:00",
+        "end_time": "10:00",
+    })
+
+    sched = client.get("/schedule").json()
+    today_tasks = [t for t in sched["schedule"] if t.get("type") == "task"]
+    assert len(today_tasks) == 1
+    # Hard deadline must be honored even with low energy
+    assert today_tasks[0]["task_id"] == t1_id
+    assert today_tasks[0]["task"] == "Urgent Hard Task"
+    assert "urgent" in today_tasks[0]["explanation"].lower()
+    assert "due " + today.isoformat() in today_tasks[0]["explanation"].lower()
+
+
+def test_future_dates_do_not_incorrectly_inherit_todays_energy_level():
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    client.delete("/tasks")
+    client.delete("/availability")
+    client.delete("/time-blocks")
+
+    # Set today's energy to 5
+    client.post("/energy", json={"level": 5})
+
+    client.post("/tasks", json={
+        "name": "Tomorrow Project",
+        "difficulty": 4,
+        "duration": 60,
+        "importance": 4,
+    })
+
+    # Available only on tomorrow
+    client.post("/availability", json={
+        "date": tomorrow.isoformat(),
+        "start_time": "14:00",
+        "end_time": "16:00",
+    })
+
+    sched = client.get(f"/schedule?date={tomorrow.isoformat()}").json()
+    assert sched["readiness"] == "unknown"
+    assert sched["energy"] is None
+
+    tomorrow_day = next(d for d in sched["days"] if d["date"] == tomorrow.isoformat())
+    assert tomorrow_day["readiness"] == "unknown"
+
+    tomorrow_task = next(item for item in tomorrow_day["schedule"] if item.get("type") == "task")
+    # Energy fit must be None for future date
+    assert tomorrow_task["energy_fit"] is None
+    # Explanation must state readiness is unknown, not claim optimal biological timing
+    assert "energy readiness is unknown for future dates" in tomorrow_task["explanation"].lower()
+    assert "5/5" not in tomorrow_task["explanation"]
+    assert "optimal" not in tomorrow_task["explanation"].lower()
+
+
+def test_explanations_reflect_actual_factors_and_values():
+    today = date.today()
+    client.delete("/tasks")
+    client.delete("/availability")
+    client.delete("/time-blocks")
+
+    # Set energy to 4
+    client.post("/energy", json={"level": 4})
+
+    client.post("/tasks", json={
+        "name": "Architecture Review",
+        "difficulty": 4,
+        "duration": 60,
+        "importance": 5,
+        "deadline": (today + timedelta(days=2)).isoformat(),
+    })
+
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "12:00",
+        "end_time": "14:00",
+    })
+
+    sched = client.get("/schedule").json()
+    task_item = next(item for item in sched["schedule"] if item.get("type") == "task")
+
+    expected_explanation = (
+        "Scheduled at 12:00 because this was the earliest feasible slot, "
+        "the task has high priority, and your reported energy level of 4/5 is compatible with its difficulty of 4/5."
+    )
+    assert task_item["explanation"] == expected_explanation
+
+
+def test_manual_placements_are_identified_correctly():
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    client.delete("/tasks")
+    client.delete("/availability")
+    client.delete("/time-blocks")
+
+    t_res = client.post("/tasks", json={
+        "name": "Manually Scheduled Task",
+        "difficulty": 3,
+        "duration": 60,
+        "importance": 4,
+    })
+    task_id = t_res.json()["task"]["id"]
+
+    client.post("/availability", json={
+        "date": tomorrow.isoformat(),
+        "start_time": "10:00",
+        "end_time": "13:00",
+    })
+
+    # Reschedule manually
+    res = client.post(f"/tasks/{task_id}/reschedule", json={
+        "date": tomorrow.isoformat(),
+        "start_time": "11:00",
+    })
+    assert res.status_code == 200
+
+    sched = client.get(f"/schedule?date={tomorrow.isoformat()}").json()
+    tomorrow_day = next(d for d in sched["days"] if d["date"] == tomorrow.isoformat())
+    task_item = next(t for t in tomorrow_day["schedule"] if t.get("task_id") == task_id)
+
+    assert task_item["is_manual"] is True
+    assert "manually placed at 11:00" in task_item["explanation"].lower()
+    assert "chosen manually by you" in task_item["explanation"].lower()
+    assert "optimal" not in task_item["explanation"].lower()
+
+
+def test_missing_feedback_activates_fallback_without_breaking():
+    today = date.today()
+    client.delete("/tasks")
+    client.delete("/availability")
+    client.delete("/feedback")
+
+    # Verify ml-status indicates collecting feedback
+    ml_status = client.get("/ml-status").json()
+    assert ml_status["status"] == "collecting_feedback"
+
+    client.post("/tasks", json={
+        "name": "No Feedback Task",
+        "difficulty": 3,
+        "duration": 60,
+        "importance": 3,
+    })
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "09:00",
+        "end_time": "11:00",
+    })
+
+    # Schedule should generate cleanly with fallback
+    sched = client.get("/schedule").json()
+    task_item = next(t for t in sched["schedule"] if t.get("type") == "task")
+    assert task_item is not None
+    # No personalization claimed in explanation
+    assert "feedback personalization" not in task_item["explanation"].lower()
+    assert "past feedback" not in task_item["explanation"].lower()
+
+    # Now add sufficient feedback (4 entries with varying outcomes)
+    for i, completed in enumerate([True, False, True, True]):
+        client.post("/feedback", json={
+            "task_name": f"Past Task {i}",
+            "energy": 3 + (i % 2),
+            "difficulty": 2 + (i % 3),
+            "duration": 45,
+            "completed": completed,
+        })
+
+    ml_status_after = client.get("/ml-status").json()
+    assert ml_status_after["status"] == "ready"
+
+    # Schedule generation continues to work seamlessly with trained model
+    sched_after = client.get("/schedule").json()
+    task_after = next(t for t in sched_after["schedule"] if t.get("type") == "task")
+    assert task_after is not None
+
+
+def test_calendar_trash_deletion_removes_task_and_manual_placement_persisting_across_reloads():
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    client.delete("/tasks")
+    client.delete("/availability")
+    client.delete("/feedback")
+
+    # Setup availability for today and tomorrow
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "09:00",
+        "end_time": "12:00",
+    })
+    client.post("/availability", json={
+        "date": tomorrow.isoformat(),
+        "start_time": "10:00",
+        "end_time": "14:00",
+    })
+
+    # Add historical feedback
+    client.post("/feedback", json={
+        "task_name": "Historical Task",
+        "energy": 4,
+        "difficulty": 3,
+        "duration": 60,
+        "completed": True,
+    })
+
+    # Add Task A and Task B
+    res_a = client.post("/tasks", json={
+        "name": "Task A to Delete",
+        "difficulty": 3,
+        "duration": 60,
+        "importance": 4,
+    })
+    task_a_id = res_a.json()["task"]["id"]
+
+    res_b = client.post("/tasks", json={
+        "name": "Task B to Keep",
+        "difficulty": 2,
+        "duration": 45,
+        "importance": 3,
+    })
+    task_b_id = res_b.json()["task"]["id"]
+
+    # Manually place Task A on tomorrow
+    res_place = client.post(f"/tasks/{task_a_id}/reschedule", json={
+        "date": tomorrow.isoformat(),
+        "start_time": "10:00",
+    })
+    assert res_place.status_code == 200
+    assert task_a_id in state_module.manual_placements
+
+    # Confirm schedule has Task A on tomorrow and Task B placed
+    sched_before = client.get("/schedule").json()
+    tomorrow_day = next(d for d in sched_before["days"] if d["date"] == tomorrow.isoformat())
+    tomorrow_task_ids = [t.get("task_id") for t in tomorrow_day["schedule"] if t.get("type") == "task"]
+    assert task_a_id in tomorrow_task_ids
+
+    # Delete Task A (simulating calendar trash drop confirmed)
+    del_res = client.delete(f"/tasks/{task_a_id}")
+    assert del_res.status_code == 200
+    assert f"Task {task_a_id} deleted successfully" in del_res.json()["message"]
+
+    # Verify Task A is removed from tasks and manual placements in memory
+    all_tasks = client.get("/tasks").json()
+    remaining_task_ids = [t["id"] for t in all_tasks]
+    assert task_a_id not in remaining_task_ids
+    assert task_b_id in remaining_task_ids
+    assert task_a_id not in state_module.manual_placements
+
+    # Verify schedule no longer contains Task A
+    sched_after = client.get("/schedule").json()
+    all_scheduled_ids = [
+        t.get("task_id")
+        for day in sched_after["days"]
+        for t in day["schedule"]
+        if t.get("type") == "task"
+    ]
+    assert task_a_id not in all_scheduled_ids
+
+    # Verify availability windows are completely intact
+    avail_res = client.get("/availability").json()
+    assert len(avail_res) == 2
+
+    # Verify feedback history remains intact
+    fb_res = client.get("/feedback").json()
+    assert len(fb_res) == 1
+    assert fb_res[0]["task_name"] == "Historical Task"
+
+    # Simulate backend restart by re-initializing state from SQLite
+    db_path = state_module.active_db_path
+    assert db_path is not None
+    state_module.init_state(db_path)
+
+    # Confirm Task A did NOT return after restart
+    reloaded_tasks = client.get("/tasks").json()
+    reloaded_ids = [t["id"] for t in reloaded_tasks]
+    assert task_a_id not in reloaded_ids
+    assert task_b_id in reloaded_ids
+    assert task_a_id not in state_module.manual_placements
+    assert len(client.get("/availability").json()) == 2
+    assert len(client.get("/feedback").json()) == 1
+
+
+def test_delete_nonexistent_task_returns_404():
+    response = client.delete("/tasks/999999")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Task not found"
+
+
+def test_delete_manually_placed_task_frees_slot():
+    today = date.today()
+    client.delete("/tasks")
+    client.delete("/availability")
+
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "09:00",
+        "end_time": "10:00",
+    })
+
+    # Task 1 takes the only 60m slot
+    t1 = client.post("/tasks", json={
+        "name": "First Task",
+        "difficulty": 3,
+        "duration": 60,
+        "importance": 4,
+    }).json()["task"]["id"]
+
+    # Task 2 is unplaced due to lack of availability
+    t2 = client.post("/tasks", json={
+        "name": "Second Task",
+        "difficulty": 3,
+        "duration": 60,
+        "importance": 3,
+    }).json()["task"]["id"]
+
+    client.post(f"/tasks/{t1}/reschedule", json={
+        "date": today.isoformat(),
+        "start_time": "09:00",
+    })
+
+    sched = client.get("/schedule").json()
+    t1_scheduled = any(t.get("task_id") == t1 for t in sched["schedule"] if t.get("type") == "task")
+    t2_scheduled = any(t.get("task_id") == t2 for t in sched["schedule"] if t.get("type") == "task")
+    assert t1_scheduled is True
+    assert t2_scheduled is False
+
+    # Delete t1
+    del_res = client.delete(f"/tasks/{t1}")
+    assert del_res.status_code == 200
+
+    # Now t2 should be able to schedule in the freed slot
+    sched_after = client.get("/schedule").json()
+    t2_scheduled_after = any(t.get("task_id") == t2 for t in sched_after["schedule"] if t.get("type") == "task")
+    assert t2_scheduled_after is True
+
+
 

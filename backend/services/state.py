@@ -230,23 +230,36 @@ def available_minutes(schedule_date: date) -> int:
     return sum(end - start for start, end in get_free_intervals(schedule_date))
 
 
-def build_reason_list(task: Task, energy_level: int, urgency: int, probability: float) -> list[str]:
+def build_reason_list(
+    task: Task,
+    energy_level: int | None = None,
+    urgency: int = 0,
+    probability: float = 0.5,
+    is_today: bool = True,
+    is_manual: bool = False,
+) -> list[str]:
     reasons: list[str] = []
+    if is_manual:
+        reasons.append("Manual placement")
     if task.difficulty >= 4:
         reasons.append("High difficulty")
     if task.importance >= 4:
         reasons.append("High importance")
     if urgency >= 3:
         reasons.append("Deadline approaching")
-    if abs(task.difficulty - energy_level) <= 1:
-        reasons.append("Good energy match")
-    elif task.difficulty > energy_level:
-        reasons.append("Better suited to a higher-energy period")
-    else:
-        reasons.append("Lower complexity fits current energy")
-    if probability >= 0.7:
+    if not is_manual:
+        if is_today and energy_level is not None:
+            if abs(task.difficulty - energy_level) <= 1:
+                reasons.append("Good energy match")
+            elif task.difficulty > energy_level:
+                reasons.append("Scheduled despite lower energy")
+            else:
+                reasons.append("Lower complexity fits current energy")
+        elif not is_today:
+            reasons.append("Readiness unknown for future date")
+    if is_today and probability >= 0.7:
         reasons.append("Strong completion likelihood")
-    elif probability < 0.4:
+    elif is_today and probability < 0.4:
         reasons.append("Model confidence is still modest")
     return reasons[:4]
 
