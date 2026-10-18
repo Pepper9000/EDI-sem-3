@@ -85,15 +85,25 @@ def init_db(db_path: Path | str | None = None) -> None:
                     energy INTEGER NOT NULL,
                     difficulty INTEGER NOT NULL,
                     duration INTEGER NOT NULL,
+                    actual_duration INTEGER,
                     completed INTEGER NOT NULL,
                     on_time INTEGER,
                     rating INTEGER,
                     completion_status TEXT,
                     difficulty_feedback TEXT,
                     timing_feedback TEXT,
-                    energy_impact TEXT
+                    energy_impact TEXT,
+                    importance INTEGER
                 );
             """)
+
+            # Ensure columns exist if table was already created in an existing database
+            cursor = conn.execute("PRAGMA table_info(feedback)")
+            columns = {row["name"] for row in cursor.fetchall()}
+            if "actual_duration" not in columns:
+                conn.execute("ALTER TABLE feedback ADD COLUMN actual_duration INTEGER;")
+            if "importance" not in columns:
+                conn.execute("ALTER TABLE feedback ADD COLUMN importance INTEGER;")
     finally:
         conn.close()
 
@@ -172,8 +182,8 @@ def load_all(db_path: Path | str | None = None) -> dict[str, Any]:
         # Load feedback
         cursor = conn.execute("""
             SELECT task_name, task_id, energy, difficulty, duration,
-                   completed, on_time, rating, completion_status,
-                   difficulty_feedback, timing_feedback, energy_impact
+                   actual_duration, completed, on_time, rating, completion_status,
+                   difficulty_feedback, timing_feedback, energy_impact, importance
             FROM feedback ORDER BY id
         """)
         feedback: list[Feedback] = []
@@ -185,6 +195,7 @@ def load_all(db_path: Path | str | None = None) -> dict[str, Any]:
                     energy=row["energy"],
                     difficulty=row["difficulty"],
                     duration=row["duration"],
+                    actual_duration=row["actual_duration"],
                     completed=bool(row["completed"]),
                     on_time=None if row["on_time"] is None else bool(row["on_time"]),
                     rating=row["rating"],
@@ -192,6 +203,7 @@ def load_all(db_path: Path | str | None = None) -> dict[str, Any]:
                     difficulty_feedback=row["difficulty_feedback"],
                     timing_feedback=row["timing_feedback"],
                     energy_impact=row["energy_impact"],
+                    importance=row["importance"],
                 )
             )
 
@@ -410,9 +422,9 @@ def add_feedback(fb: Feedback, db_path: Path | str | None = None) -> None:
                 """
                 INSERT INTO feedback (
                     task_name, task_id, energy, difficulty, duration,
-                    completed, on_time, rating, completion_status,
-                    difficulty_feedback, timing_feedback, energy_impact
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    actual_duration, completed, on_time, rating, completion_status,
+                    difficulty_feedback, timing_feedback, energy_impact, importance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     fb.task_name,
@@ -420,6 +432,7 @@ def add_feedback(fb: Feedback, db_path: Path | str | None = None) -> None:
                     fb.energy,
                     fb.difficulty,
                     fb.duration,
+                    fb.actual_duration,
                     1 if fb.completed else 0,
                     None if fb.on_time is None else (1 if fb.on_time else 0),
                     fb.rating,
@@ -427,6 +440,7 @@ def add_feedback(fb: Feedback, db_path: Path | str | None = None) -> None:
                     fb.difficulty_feedback,
                     fb.timing_feedback,
                     fb.energy_impact,
+                    fb.importance,
                 ),
             )
     finally:

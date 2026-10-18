@@ -74,6 +74,7 @@ const api = {
   }),
   getFeedback: () => request('/feedback'),
   submitFeedback: (feedback) => request('/feedback', { method: 'POST', body: JSON.stringify(feedback) }),
+  getProductivityInsights: () => request('/productivity-insights'),
   rescheduleTask: (taskId, { date, start_time }) => request(`/tasks/${taskId}/reschedule`, {
     method: 'POST',
     body: JSON.stringify({ date, start_time }),

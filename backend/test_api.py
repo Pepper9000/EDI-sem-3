@@ -1681,4 +1681,205 @@ def test_delete_manually_placed_task_frees_slot():
     assert t2_scheduled_after is True
 
 
+def test_productivity_insights_empty_feedback():
+    client.delete("/feedback")
+
+    res = client.get("/productivity-insights")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["total_outcomes"] == 0
+    assert data["completed_count"] == 0
+    assert data["completion_rate"] is None
+    assert data["on_time_recorded_count"] == 0
+    assert data["on_time_count"] == 0
+    assert data["on_time_rate"] is None
+    assert data["average_rating"] is None
+    assert data["duration_metrics"]["sample_size"] == 0
+    assert data["duration_metrics"]["avg_planned_duration"] is None
+    assert data["duration_metrics"]["avg_actual_duration"] is None
+    assert data["duration_metrics"]["duration_diff_minutes"] is None
+    assert data["data_status"] == "no_data"
+    assert data["sample_size_adequate"] is False
+    assert "No task outcomes recorded yet" in data["summary"]
+    assert "correlation does not establish causation" in data["cautionary_note"].lower()
+
+    # Also verify alias endpoint /feedback/insights
+    alias_res = client.get("/feedback/insights")
+    assert alias_res.status_code == 200
+    assert alias_res.json()["total_outcomes"] == 0
+
+
+def test_productivity_insights_small_sample_and_metrics():
+    client.delete("/feedback")
+
+    # Item 1: completed, on_time=True, rating=5, planned=60, actual=75, energy=4, diff=4 (matched)
+    r1 = client.post("/feedback", json={
+        "task_name": "Task 1",
+        "energy": 4,
+        "difficulty": 4,
+        "duration": 60,
+        "actual_duration": 75,
+        "completed": True,
+        "on_time": True,
+        "rating": 5,
+        "importance": 5,
+    })
+    assert r1.status_code == 200
+
+    # Item 2: not completed, on_time=None, rating=2, planned=45, actual=None (not supplied!), energy=1, diff=5 (mismatched)
+    r2 = client.post("/feedback", json={
+        "task_name": "Task 2",
+        "energy": 1,
+        "difficulty": 5,
+        "duration": 45,
+        "completed": False,
+        "rating": 2,
+        "importance": 3,
+    })
+    assert r2.status_code == 200
+
+    # Item 3: completed, on_time=False, rating=None, planned=30, actual=30, energy=3, diff=2 (matched)
+    r3 = client.post("/feedback", json={
+        "task_name": "Task 3",
+        "energy": 3,
+        "difficulty": 2,
+        "duration": 30,
+        "actual_duration": 30,
+        "completed": True,
+        "completion_status": "completed",
+        "on_time": False,
+    })
+    assert r3.status_code == 200
+
+    res = client.get("/productivity-insights")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["total_outcomes"] == 3
+    assert data["completed_count"] == 2
+    assert data["completion_rate"] == 66.7
+
+    assert data["on_time_recorded_count"] == 2
+    assert data["on_time_count"] == 1
+    assert data["on_time_rate"] == 50.0
+
+    assert data["rating_recorded_count"] == 2
+    assert data["average_rating"] == 3.5  # (5 + 2) / 2
+
+    # Verify duration metrics ONLY use records where actual_duration was genuinely supplied (Task 1 and Task 3)
+    dur = data["duration_metrics"]
+    assert dur["sample_size"] == 2
+    assert dur["avg_planned_duration"] == 45.0  # (60 + 30) / 2
+    assert dur["avg_actual_duration"] == 52.5    # (75 + 30) / 2
+    assert dur["duration_diff_minutes"] == 7.5   # 52.5 - 45.0
+
+    # Small sample warning
+    assert data["sample_size_adequate"] is False
+    assert data["data_status"] == "insufficient_sample"
+    assert "Preliminary data" in data["summary"]
+    assert "minimum sample size of 5" in data["summary"]
+
+
+def test_productivity_insights_adequate_sample_and_compatibility():
+    client.delete("/feedback")
+
+    # 3 matched tasks (|diff - energy| <= 1), all completed
+    for i in range(3):
+        r = client.post("/feedback", json={
+            "task_name": f"Matched Task {i}",
+            "energy": 4,
+            "difficulty": 4,
+            "duration": 50,
+            "actual_duration": 45,
+            "completed": True,
+            "completion_status": "completed",
+            "on_time": True,
+            "rating": 5,
+        })
+        assert r.status_code == 200
+
+    # 2 mismatched tasks (|diff - energy| > 1), neither completed
+    for i in range(2):
+        r = client.post("/feedback", json={
+            "task_name": f"Mismatched Task {i}",
+            "energy": 1,
+            "difficulty": 4,
+            "duration": 60,
+            "completed": False,
+            "completion_status": "skipped",
+            "on_time": False,
+            "rating": 2,
+        })
+        assert r.status_code == 200
+
+    res = client.get("/productivity-insights")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["total_outcomes"] == 5
+    assert data["completed_count"] == 3
+    assert data["completion_rate"] == 60.0
+    assert data["sample_size_adequate"] is True
+    assert data["data_status"] == "sufficient_sample"
+
+    compat = data["compatibility_comparison"]
+    assert compat["matched"]["sample_size"] == 3
+    assert compat["matched"]["completed_count"] == 3
+    assert compat["matched"]["completion_rate"] == 100.0
+
+    assert compat["mismatched"]["sample_size"] == 2
+    assert compat["mismatched"]["completed_count"] == 0
+    assert compat["mismatched"]["completion_rate"] == 0.0
+
+    # Summary explicitly reports N counts and rates
+    assert "100.0% completion rate (N=3)" in data["summary"]
+    assert "0.0% for mismatched tasks (N=2)" in data["summary"]
+    assert data["cautionary_note"] is not None
+
+
+def test_feedback_actual_duration_and_importance_persistence():
+    client.delete("/feedback")
+
+    post_res = client.post("/feedback", json={
+        "task_name": "Deep Dive Refactoring",
+        "task_id": 101,
+        "energy": 4,
+        "difficulty": 4,
+        "duration": 90,
+        "actual_duration": 80,
+        "importance": 5,
+        "completed": True,
+        "on_time": True,
+        "rating": 5,
+        "completion_status": "completed",
+    })
+    assert post_res.status_code == 200
+
+    # Verify endpoint GET /feedback
+    fb_list = client.get("/feedback").json()
+    assert len(fb_list) == 1
+    assert fb_list[0]["actual_duration"] == 80
+    assert fb_list[0]["importance"] == 5
+
+    # Reinitialize backend state from SQLite
+    db_path = state_module.active_db_path
+    assert db_path is not None
+    state_module.init_state(db_path)
+
+    # Verify both fields survived reload in state and API
+    reloaded_fb = client.get("/feedback").json()
+    assert len(reloaded_fb) == 1
+    assert reloaded_fb[0]["actual_duration"] == 80
+    assert reloaded_fb[0]["importance"] == 5
+    assert reloaded_fb[0]["task_name"] == "Deep Dive Refactoring"
+
+    # Verify insights calculate properly after reload
+    insights = client.get("/productivity-insights").json()
+    assert insights["duration_metrics"]["sample_size"] == 1
+    assert insights["duration_metrics"]["avg_actual_duration"] == 80.0
+    assert insights["duration_metrics"]["avg_planned_duration"] == 90.0
+    assert insights["duration_metrics"]["duration_diff_minutes"] == -10.0
+
+
 

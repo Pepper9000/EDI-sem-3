@@ -23,6 +23,8 @@ class Feedback(BaseModel):
     energy: int = Field(ge=1, le=5)
     difficulty: int = Field(ge=1, le=5)
     duration: int = Field(gt=0)
+    actual_duration: int | None = Field(default=None, gt=0)
+    importance: int | None = Field(default=None, ge=1, le=5)
     completed: bool
     on_time: bool | None = None
     rating: int | None = Field(default=None, ge=1, le=5)

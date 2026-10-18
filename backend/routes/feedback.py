@@ -4,6 +4,7 @@ from ml.personalization import train_model
 from models.schemas import Feedback
 from services import db
 from services import state as state_module
+from services.insights import calculate_productivity_insights
 
 router = APIRouter()
 
@@ -53,3 +54,10 @@ def get_ml_status():
         "learning_signal": "Task completion prediction",
         "message": "Collecting feedback. The model needs more varied feedback before training.",
     }
+
+
+@router.get("/productivity-insights")
+@router.get("/feedback/insights")
+def get_productivity_insights():
+    return calculate_productivity_insights(state_module.feedback_data)
+

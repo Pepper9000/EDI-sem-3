@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { api } from './api.js'
+import { computeProductivityInsights } from './insights.js'
 
 const jsonResponse = (payload) => ({
   ok: true,
@@ -473,6 +474,128 @@ test('calendar trash drop: deletion failure reports error without mutating state
     globalThis.fetch = originalFetch
   }
 })
+
+test('computeProductivityInsights handles empty feedback list', () => {
+  const insights = computeProductivityInsights([])
+  assert.equal(insights.total_outcomes, 0)
+  assert.equal(insights.completed_count, 0)
+  assert.equal(insights.completion_rate, null)
+  assert.equal(insights.on_time_rate, null)
+  assert.equal(insights.average_rating, null)
+  assert.equal(insights.duration_metrics.sample_size, 0)
+  assert.equal(insights.duration_metrics.duration_diff_minutes, null)
+  assert.equal(insights.data_status, 'no_data')
+  assert.equal(insights.sample_size_adequate, false)
+  assert.match(insights.summary, /No task outcomes recorded yet/i)
+  assert.match(insights.cautionary_note, /correlation does not establish causation/i)
+})
+
+test('computeProductivityInsights handles small samples and duration metrics accurately', () => {
+  const mockFeedback = [
+    {
+      task_name: 'Task 1',
+      energy: 4,
+      difficulty: 4,
+      duration: 60,
+      actual_duration: 75,
+      completed: true,
+      on_time: true,
+      rating: 5,
+    },
+    {
+      task_name: 'Task 2',
+      energy: 1,
+      difficulty: 5,
+      duration: 45,
+      actual_duration: null,
+      completed: false,
+      on_time: null,
+      rating: 2,
+    },
+    {
+      task_name: 'Task 3',
+      energy: 3,
+      difficulty: 2,
+      duration: 30,
+      actual_duration: 30,
+      completion_status: 'completed',
+      on_time: false,
+      rating: null,
+    },
+  ]
+
+  const insights = computeProductivityInsights(mockFeedback)
+  assert.equal(insights.total_outcomes, 3)
+  assert.equal(insights.completed_count, 2)
+  assert.equal(insights.completion_rate, 66.7)
+
+  assert.equal(insights.on_time_recorded_count, 2)
+  assert.equal(insights.on_time_count, 1)
+  assert.equal(insights.on_time_rate, 50.0)
+
+  assert.equal(insights.rating_recorded_count, 2)
+  assert.equal(insights.average_rating, 3.5)
+
+  // Duration metrics must strictly include only records where actual_duration was provided
+  assert.equal(insights.duration_metrics.sample_size, 2)
+  assert.equal(insights.duration_metrics.avg_planned_duration, 45.0)
+  assert.equal(insights.duration_metrics.avg_actual_duration, 52.5)
+  assert.equal(insights.duration_metrics.duration_diff_minutes, 7.5)
+
+  assert.equal(insights.sample_size_adequate, false)
+  assert.equal(insights.data_status, 'insufficient_sample')
+  assert.match(insights.summary, /Preliminary data/i)
+  assert.match(insights.summary, /minimum sample size of 5/i)
+})
+
+test('computeProductivityInsights computes energy compatibility and handles adequate samples', () => {
+  const mockFeedback = [
+    // 3 matched (|diff - energy| <= 1), all completed
+    { task_name: 'T1', energy: 4, difficulty: 4, duration: 60, completed: true, on_time: true },
+    { task_name: 'T2', energy: 3, difficulty: 4, duration: 60, completed: true, on_time: true },
+    { task_name: 'T3', energy: 2, difficulty: 1, duration: 60, completed: true, on_time: true },
+    // 2 mismatched (|diff - energy| > 1), 0 completed
+    { task_name: 'T4', energy: 1, difficulty: 4, duration: 60, completed: false, on_time: false },
+    { task_name: 'T5', energy: 5, difficulty: 1, duration: 60, completed: false, on_time: false },
+  ]
+
+  const insights = computeProductivityInsights(mockFeedback)
+  assert.equal(insights.total_outcomes, 5)
+  assert.equal(insights.completed_count, 3)
+  assert.equal(insights.completion_rate, 60.0)
+  assert.equal(insights.sample_size_adequate, true)
+  assert.equal(insights.data_status, 'sufficient_sample')
+
+  assert.equal(insights.compatibility_comparison.matched.sample_size, 3)
+  assert.equal(insights.compatibility_comparison.matched.completed_count, 3)
+  assert.equal(insights.compatibility_comparison.matched.completion_rate, 100.0)
+
+  assert.equal(insights.compatibility_comparison.mismatched.sample_size, 2)
+  assert.equal(insights.compatibility_comparison.mismatched.completed_count, 0)
+  assert.equal(insights.compatibility_comparison.mismatched.completion_rate, 0.0)
+
+  assert.match(insights.summary, /100% completion rate \(N=3\)/i)
+  assert.match(insights.summary, /0% for mismatched tasks \(N=2\)/i)
+})
+
+test('api.getProductivityInsights sends GET to /productivity-insights', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (...args) => {
+    calls.push(args)
+    return jsonResponse({ total_outcomes: 0, completion_rate: null })
+  }
+
+  try {
+    const res = await api.getProductivityInsights()
+    assert.equal(res.total_outcomes, 0)
+    assert.equal(calls[0][0], 'http://127.0.0.1:8000/productivity-insights')
+    assert.equal(calls[0][1]?.method || 'GET', 'GET')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 
 
 

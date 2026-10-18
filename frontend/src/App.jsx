@@ -10,6 +10,7 @@ import {
   YAxis,
 } from 'recharts'
 import { api } from './services/api.js'
+import { computeProductivityInsights } from './services/insights.js'
 
 const defaultTaskForm = { name: '', difficulty: 3, duration: 60, importance: 3, deadline: '' }
 const pageLoadedAt = new Date()
@@ -57,6 +58,8 @@ const completionStatusFor = (task, records) => {
 
 const feedbackChoices = {
   completion_status: [['completed', 'Completed'], ['partial', 'Partially done'], ['skipped', 'Skipped']],
+  on_time: [['yes', 'On time'], ['no', 'Ran late']],
+  rating: [['5', '★ 5'], ['4', '★ 4'], ['3', '★ 3'], ['2', '★ 2'], ['1', '★ 1']],
   difficulty_feedback: [['too_easy', 'Too easy'], ['about_right', 'About right'], ['too_hard', 'Too hard']],
   timing_feedback: [['too_early', 'Too early'], ['good_time', 'Good time'], ['too_late', 'Too late']],
   energy_impact: [['energized', 'More energized'], ['same', 'About the same'], ['drained', 'Drained']],
@@ -106,7 +109,17 @@ function App() {
   const [weeklyForm, setWeeklyForm] = useState(defaultWeeklyForm)
   const [selectedWeekdays, setSelectedWeekdays] = useState(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'])
   const [endOfDayDraft, setEndOfDayDraft] = useState('22:00')
-  const [feedbackForm, setFeedbackForm] = useState({ taskId: '', completion_status: '', difficulty_feedback: '', timing_feedback: '', energy_impact: '' })
+  const [feedbackForm, setFeedbackForm] = useState({
+    taskId: '',
+    completion_status: '',
+    difficulty_feedback: '',
+    timing_feedback: '',
+    energy_impact: '',
+    on_time: '',
+    rating: '',
+    actual_duration: '',
+  })
+  const [insights, setInsights] = useState(null)
   const [selectedTaskDetails, setSelectedTaskDetails] = useState(null)
   const [rescheduleForm, setRescheduleForm] = useState({ date: pageDate, start_time: '09:00' })
   const [draggedTask, setDraggedTask] = useState(null)
@@ -118,9 +131,10 @@ function App() {
   const [statusMessage, setStatusMessage] = useState('Loading seven-day plan…')
 
   const refreshDashboard = async () => {
-    const [taskData, schedule, windows, energy, bio, feedbackData, settingData] = await Promise.all([
+    const [taskData, schedule, windows, energy, bio, feedbackData, settingData, insightsData] = await Promise.all([
       api.getTasks(), api.getSchedule(), api.getAvailability(), api.getEnergy(),
       api.getBiologicalState(), api.getFeedback(), api.getSettings(),
+      api.getProductivityInsights().catch(() => null),
     ])
     setTasks(taskData)
     setScheduleData(schedule)
@@ -129,6 +143,7 @@ function App() {
     setFeedback(feedbackData)
     setSettings(settingData)
     setEndOfDayDraft(settingData.end_of_day)
+    setInsights(insightsData)
   }
 
   const loadDashboard = useEffectEvent(async () => {
@@ -272,21 +287,45 @@ function App() {
       return
     }
     await runAction('feedback', async () => {
+      const actualDurationVal = feedbackForm.actual_duration && !Number.isNaN(parseInt(feedbackForm.actual_duration, 10))
+        ? Math.max(1, parseInt(feedbackForm.actual_duration, 10))
+        : null
+      const ratingVal = feedbackForm.rating ? parseInt(feedbackForm.rating, 10) : null
+      const onTimeVal = feedbackForm.on_time === 'yes' ? true : feedbackForm.on_time === 'no' ? false : null
+
       const result = await api.submitFeedback({
         task_name: selectedFeedbackTask.name,
         task_id: selectedFeedbackTask.id,
         energy: biologicalState?.manual_energy ?? 3,
         difficulty: selectedFeedbackTask.difficulty,
+        importance: selectedFeedbackTask.importance,
         duration: selectedFeedbackTask.duration,
+        actual_duration: actualDurationVal,
         completed: feedbackForm.completion_status === 'completed',
+        on_time: onTimeVal,
+        rating: ratingVal,
         completion_status: feedbackForm.completion_status,
         difficulty_feedback: feedbackForm.difficulty_feedback,
         timing_feedback: feedbackForm.timing_feedback,
         energy_impact: feedbackForm.energy_impact || null,
       })
-      setFeedbackForm({ taskId: '', completion_status: '', difficulty_feedback: '', timing_feedback: '', energy_impact: '' })
+      setFeedbackForm({
+        taskId: '',
+        completion_status: '',
+        difficulty_feedback: '',
+        timing_feedback: '',
+        energy_impact: '',
+        on_time: '',
+        rating: '',
+        actual_duration: '',
+      })
       setStatusMessage(result.message)
-      setFeedback(await api.getFeedback())
+      const [updatedFeedback, updatedInsights] = await Promise.all([
+        api.getFeedback(),
+        api.getProductivityInsights().catch(() => null),
+      ])
+      setFeedback(updatedFeedback)
+      setInsights(updatedInsights)
     })
   }
 
@@ -346,10 +385,7 @@ function App() {
   const completedFeedback = feedback.filter((entry) => entry.completion_status === 'completed' || (entry.completion_status == null && entry.completed))
   const skippedFeedback = feedback.filter((entry) => entry.completion_status === 'skipped')
   const partialFeedback = feedback.filter((entry) => entry.completion_status === 'partial')
-  const ratedFeedback = feedback.filter((entry) => Number.isFinite(entry.rating))
-  const averageRating = ratedFeedback.length
-    ? (ratedFeedback.reduce((total, entry) => total + entry.rating, 0) / ratedFeedback.length).toFixed(1)
-    : '—'
+  const activeInsights = insights || computeProductivityInsights(feedback)
   const chartData = Array.from({ length: 24 }, (_, hour) => ({ hour, energy: energyForHour(hour) }))
   const now = pageLoadedAt
   const currentHour = now.getHours() + now.getMinutes() / 60
@@ -1044,34 +1080,115 @@ function App() {
           </section>
 
           <section className="content-grid insights-grid" id="insights">
-            <article className="panel insight-panel">
+            <article className="panel insight-panel productivity-panel">
               <div className="panel-heading">
-                <div><p className="eyebrow">CURRENT SESSION</p><h2>What’s happening</h2></div>
-                <span className="subtle-pill">Not historical</span>
+                <div>
+                  <p className="eyebrow">PRODUCTIVITY INSIGHTS</p>
+                  <h2>Effectiveness & outcomes</h2>
+                </div>
+                <span className="subtle-pill">
+                  {activeInsights.total_outcomes === 0
+                    ? 'No data'
+                    : activeInsights.sample_size_adequate
+                      ? `N = ${activeInsights.total_outcomes} (sample adequate)`
+                      : `N = ${activeInsights.total_outcomes} (preliminary)`}
+                </span>
               </div>
               <div className="insight-stats">
-                <div><strong>{taskEntries.length}</strong><span>scheduled ({selectedDay.short_date || activeDate})</span></div>
-                <div><strong>{breakEntries.length}</strong><span>breaks</span></div>
-                <div><strong>{unscheduledEntries.length}</strong><span>unplaced</span></div>
+                <div>
+                  <strong>{activeInsights.completion_rate != null ? `${activeInsights.completion_rate}%` : '—'}</strong>
+                  <span>completion ({activeInsights.completed_count}/{activeInsights.total_outcomes})</span>
+                </div>
+                <div>
+                  <strong>{activeInsights.on_time_rate != null ? `${activeInsights.on_time_rate}%` : '—'}</strong>
+                  <span>on-time ({activeInsights.on_time_count}/{activeInsights.on_time_recorded_count || 0})</span>
+                </div>
+                <div>
+                  <strong>{activeInsights.average_rating != null ? `${activeInsights.average_rating}` : '—'}</strong>
+                  <span>avg rating ({activeInsights.rating_recorded_count} rated)</span>
+                </div>
               </div>
+
+              {/* Planned vs. Actual Duration */}
+              <div className="insight-section-block">
+                <span className="insight-block-title">Planned vs. Actual Duration</span>
+                {activeInsights.duration_metrics.sample_size > 0 ? (
+                  <p className="insight-block-desc">
+                    Planned avg: <strong>{activeInsights.duration_metrics.avg_planned_duration}m</strong> · Actual avg: <strong>{activeInsights.duration_metrics.avg_actual_duration}m</strong>{' '}
+                    <span className={activeInsights.duration_metrics.duration_diff_minutes > 0 ? 'dur-tag over' : 'dur-tag under'}>
+                      ({activeInsights.duration_metrics.duration_diff_minutes > 0 ? `+${activeInsights.duration_metrics.duration_diff_minutes}m` : `${activeInsights.duration_metrics.duration_diff_minutes}m`}, N={activeInsights.duration_metrics.sample_size})
+                    </span>
+                  </p>
+                ) : (
+                  <p className="insight-block-desc text-muted">
+                    No actual duration recorded yet (N=0). Provide actual minutes during check-in to track.
+                  </p>
+                )}
+              </div>
+
+              {/* Completion by Energy Compatibility */}
+              <div className="insight-section-block">
+                <span className="insight-block-title">Completion by Energy Compatibility</span>
+                {activeInsights.sample_size_adequate ? (
+                  <div className="compatibility-row">
+                    <div className="compat-chip">
+                      <span className="compat-label">Energy matched (Δ ≤ 1)</span>
+                      <strong>
+                        {activeInsights.compatibility_comparison.matched.completion_rate != null
+                          ? `${activeInsights.compatibility_comparison.matched.completion_rate}% (${activeInsights.compatibility_comparison.matched.completed_count}/${activeInsights.compatibility_comparison.matched.sample_size})`
+                          : '— (N=0)'}
+                      </strong>
+                    </div>
+                    <div className="compat-chip">
+                      <span className="compat-label">Mismatched (Δ &gt; 1)</span>
+                      <strong>
+                        {activeInsights.compatibility_comparison.mismatched.completion_rate != null
+                          ? `${activeInsights.compatibility_comparison.mismatched.completion_rate}% (${activeInsights.compatibility_comparison.mismatched.completed_count}/${activeInsights.compatibility_comparison.mismatched.sample_size})`
+                          : '— (N=0)'}
+                      </strong>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="insight-block-desc text-muted">
+                    {activeInsights.total_outcomes > 0
+                      ? `Preliminary sample (N=${activeInsights.total_outcomes}). Need ≥5 recorded outcomes to assess whether energy matching correlates with completion.`
+                      : 'No task check-ins recorded yet.'}
+                  </p>
+                )}
+              </div>
+
               <div className="completion-breakdown">
                 <span>Completed <strong>{completedFeedback.length}</strong></span>
                 <span>Partial <strong>{partialFeedback.length}</strong></span>
                 <span>Skipped <strong>{skippedFeedback.length}</strong></span>
-                <span>Avg. rated <strong>{averageRating}</strong></span>
+                <span>Ratings <strong>{activeInsights.rating_recorded_count}</strong></span>
+              </div>
+
+              <div className="insights-caution-box">
+                <p className="caution-summary">{activeInsights.summary}</p>
+                <p className="caution-note">{activeInsights.cautionary_note}</p>
               </div>
             </article>
+
             <article className="panel insight-panel">
               <div className="panel-heading">
                 <div><p className="eyebrow">FEEDBACK LOOP</p><h2>Quick task check-in</h2></div>
                 <span className="subtle-pill">10–15 sec</span>
               </div>
               <form className="feedback-form" onSubmit={handleFeedbackSubmit}>
-                <label className="field-label">Task<select required value={feedbackForm.taskId} onChange={(event) => setFeedbackForm({ ...feedbackForm, taskId: event.target.value })}><option value="">Choose a task</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.name}</option>)}</select></label>
+                <label className="field-label">
+                  Task
+                  <select required value={feedbackForm.taskId} onChange={(event) => setFeedbackForm({ ...feedbackForm, taskId: event.target.value })}>
+                    <option value="">Choose a task</option>
+                    {tasks.map((task) => <option key={task.id} value={task.id}>{task.name}</option>)}
+                  </select>
+                </label>
                 {[
                   ['completion_status', 'How did it go?'],
+                  ['on_time', 'Completed on time? · optional'],
                   ['difficulty_feedback', 'How did the difficulty feel?'],
                   ['timing_feedback', 'How was the timing?'],
+                  ['rating', 'Task satisfaction rating · optional'],
                   ['energy_impact', 'Energy impact · optional'],
                 ].map(([field, label]) => (
                   <fieldset className="feedback-group" key={field}>
@@ -1083,8 +1200,19 @@ function App() {
                     </div>
                   </fieldset>
                 ))}
+                <label className="field-label">
+                  Actual duration (minutes) · optional
+                  <input
+                    type="number"
+                    min="1"
+                    max="720"
+                    placeholder={selectedFeedbackTask ? `Planned: ${selectedFeedbackTask.duration}m` : 'Minutes spent'}
+                    value={feedbackForm.actual_duration}
+                    onChange={(event) => setFeedbackForm({ ...feedbackForm, actual_duration: event.target.value })}
+                  />
+                </label>
                 <div className="feedback-footer">
-                  <span>{feedback.length ? `${feedback.length} saved in this backend session` : 'Answers are stored for this backend session.'}</span>
+                  <span>{feedback.length ? `${feedback.length} check-in(s) persisted in database` : 'Answers are stored persistently.'}</span>
                   <button className="button button-primary" type="submit" disabled={Boolean(busy) || !tasks.length}>{busy === 'feedback' ? 'Saving…' : 'Save check-in'}</button>
                 </div>
               </form>
