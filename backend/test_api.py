@@ -1,10 +1,20 @@
 from datetime import date, timedelta
-
+from pathlib import Path
+import pytest
 from fastapi.testclient import TestClient
 
 from main import app
+from services import state as state_module
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def use_temp_sqlite_db(tmp_path, monkeypatch):
+    test_db = tmp_path / "test_dayplan.db"
+    monkeypatch.setenv("DAYPLAN_DB_PATH", str(test_db))
+    state_module.init_state(test_db)
+    yield
 
 
 def test_energy_round_trip():
@@ -726,6 +736,242 @@ def test_reschedule_rejects_overlap_and_rollback_preserves_position():
     t1_entry = next(item for item in sched["schedule"] if item.get("task_id") == t1_id)
     assert t1_entry["start_time"] == "10:00"
     assert t1_entry["end_time"] == "11:00"
+
+
+def test_tasks_survive_reinitialization():
+    today = date.today()
+    client.delete("/tasks")
+    r1 = client.post("/tasks", json={
+        "name": "Persistent Task 1",
+        "difficulty": 4,
+        "duration": 45,
+        "importance": 5,
+        "deadline": (today + timedelta(days=2)).isoformat(),
+    })
+    assert r1.status_code == 200
+    t1_id = r1.json()["task"]["id"]
+
+    r2 = client.post("/tasks", json={
+        "name": "Persistent Task 2",
+        "difficulty": 2,
+        "duration": 90,
+        "importance": 3,
+    })
+    assert r2.status_code == 200
+    t2_id = r2.json()["task"]["id"]
+
+    # Reinitialize state from the active DB path
+    state_module.init_state(state_module.active_db_path)
+
+    tasks_res = client.get("/tasks")
+    assert tasks_res.status_code == 200
+    tasks = tasks_res.json()
+    assert len(tasks) == 2
+    task1 = next(t for t in tasks if t["id"] == t1_id)
+    assert task1["name"] == "Persistent Task 1"
+    assert task1["difficulty"] == 4
+    assert task1["duration"] == 45
+    assert task1["importance"] == 5
+    assert task1["deadline"] == (today + timedelta(days=2)).isoformat()
+
+    task2 = next(t for t in tasks if t["id"] == t2_id)
+    assert task2["name"] == "Persistent Task 2"
+    assert task2["difficulty"] == 2
+    assert task2["duration"] == 90
+    assert task2["deadline"] is None
+
+
+def test_availability_windows_survive_reinitialization_without_duplication():
+    today = date.today()
+    client.delete("/availability")
+
+    # Add window
+    r1 = client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "09:00",
+        "end_time": "12:00",
+    })
+    assert r1.status_code == 200
+    assert r1.json()["message"] == "Availability window added successfully"
+
+    # Repeated identical call should not duplicate
+    r2 = client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "09:00",
+        "end_time": "12:00",
+    })
+    assert r2.status_code == 200
+    assert r2.json()["message"] == "Availability window already exists"
+
+    # Add second distinct window
+    r3 = client.post("/availability", json={
+        "date": (today + timedelta(days=1)).isoformat(),
+        "start_time": "14:00",
+        "end_time": "17:00",
+    })
+    assert r3.status_code == 200
+
+    # Reinitialize state
+    state_module.init_state(state_module.active_db_path)
+
+    avail_res = client.get("/availability")
+    assert avail_res.status_code == 200
+    windows = avail_res.json()
+    assert len(windows) == 2
+    dates = [w["date"] for w in windows]
+    assert today.isoformat() in dates
+    assert (today + timedelta(days=1)).isoformat() in dates
+
+
+def test_manual_calendar_placements_survive_reinitialization_and_regeneration():
+    today = date.today()
+    client.delete("/tasks")
+    client.delete("/availability")
+
+    t_res = client.post("/tasks", json={
+        "name": "Manually Placed Task",
+        "difficulty": 3,
+        "duration": 60,
+        "importance": 4,
+    })
+    task_id = t_res.json()["task"]["id"]
+
+    client.post("/availability", json={
+        "date": (today + timedelta(days=1)).isoformat(),
+        "start_time": "13:00",
+        "end_time": "16:00",
+    })
+
+    # Reschedule via Calendar endpoint
+    res = client.post(f"/tasks/{task_id}/reschedule", json={
+        "date": (today + timedelta(days=1)).isoformat(),
+        "start_time": "14:00",
+    })
+    assert res.status_code == 200
+    assert res.json()["start_time"] == "14:00"
+
+    # Reinitialize backend state
+    state_module.init_state(state_module.active_db_path)
+
+    # Verify manual placement survived in memory & DB
+    assert task_id in state_module.manual_placements
+    assert str(state_module.manual_placements[task_id]["date"]) == (today + timedelta(days=1)).isoformat()
+    assert state_module.manual_placements[task_id]["start_time"] == "14:00"
+
+    # Verify schedule regeneration preserves the manual placement
+    sched = client.get(f"/schedule?date={(today + timedelta(days=1)).isoformat()}").json()
+    day_entry = next(d for d in sched["days"] if d["date"] == (today + timedelta(days=1)).isoformat())
+    task_slot = next(item for item in day_entry["schedule"] if item.get("task_id") == task_id)
+    assert task_slot["start_time"] == "14:00"
+    assert task_slot["end_time"] == "15:00"
+    assert task_slot.get("is_manual") is True
+
+
+def test_feedback_and_settings_restored_correctly():
+    client.delete("/feedback")
+
+    client.put("/settings", json={"end_of_day": "23:00"})
+    client.post("/energy", json={"level": 5})
+
+    client.post("/wearable-data", json={
+        "sleep_hours": 7.5,
+        "resting_heart_rate": 60,
+        "hrv": 55.0,
+        "steps": 9000,
+        "active_minutes": 45,
+    })
+
+    client.post("/feedback", json={
+        "task_name": "Review Code",
+        "task_id": 1,
+        "energy": 4,
+        "difficulty": 3,
+        "duration": 60,
+        "completed": True,
+        "on_time": True,
+        "rating": 5,
+        "completion_status": "completed",
+        "difficulty_feedback": "about_right",
+        "timing_feedback": "good_time",
+        "energy_impact": "energized",
+    })
+
+    # Reinitialize state
+    state_module.init_state(state_module.active_db_path)
+
+    settings_res = client.get("/settings").json()
+    assert settings_res["end_of_day"] == "23:00"
+
+    energy_res = client.get("/energy").json()
+    assert energy_res["energy"] == 5
+
+    wearable_res = client.get("/wearable-data").json()
+    assert wearable_res["sleep_hours"] == 7.5
+    assert wearable_res["steps"] == 9000
+
+    feedback_res = client.get("/feedback").json()
+    assert len(feedback_res) == 1
+    fb = feedback_res[0]
+    assert fb["task_name"] == "Review Code"
+    assert fb["rating"] == 5
+    assert fb["completion_status"] == "completed"
+    assert fb["energy_impact"] == "energized"
+
+
+def test_deleting_task_cleans_up_associated_state():
+    today = date.today()
+    client.delete("/tasks")
+    client.delete("/availability")
+
+    t_res = client.post("/tasks", json={
+        "name": "Task to Delete",
+        "difficulty": 3,
+        "duration": 60,
+        "importance": 4,
+    })
+    task_id = t_res.json()["task"]["id"]
+
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "10:00",
+        "end_time": "12:00",
+    })
+
+    client.post(f"/tasks/{task_id}/reschedule", json={
+        "date": today.isoformat(),
+        "start_time": "10:00",
+    })
+    assert task_id in state_module.manual_placements
+
+    # Delete task
+    del_res = client.delete(f"/tasks/{task_id}")
+    assert del_res.status_code == 200
+    assert task_id not in state_module.manual_placements
+
+    # Reinitialize state and verify neither task nor manual placement exist
+    state_module.init_state(state_module.active_db_path)
+    assert not any(t.id == task_id for t in state_module.tasks)
+    assert task_id not in state_module.manual_placements
+
+
+def test_database_errors_do_not_falsely_report_success(monkeypatch):
+    import sqlite3
+
+    def failing_add_task(*args, **kwargs):
+        raise sqlite3.OperationalError("Simulated database failure")
+
+    monkeypatch.setattr("services.db.add_task", failing_add_task)
+
+    initial_tasks_count = len(state_module.tasks)
+    response = client.post("/tasks", json={
+        "name": "Failed Task",
+        "difficulty": 3,
+        "duration": 30,
+        "importance": 3,
+    })
+    assert response.status_code == 500
+    assert "Database error" in response.json()["detail"]
+    assert len(state_module.tasks) == initial_tasks_count
 
 
 

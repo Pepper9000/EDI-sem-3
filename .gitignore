@@ -49,6 +49,14 @@ pip-wheel-metadata/
 # Test artifacts
 .pytest_cache/
 
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+backend/data/
+
 # Keep legitimate app source tracked
 !backend/main.py
 !backend/test_api.py

@@ -1,7 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from ml.personalization import train_model
 from models.schemas import Feedback
+from services import db
 from services import state as state_module
 
 router = APIRouter()
@@ -9,6 +10,10 @@ router = APIRouter()
 
 @router.post("/feedback")
 def add_feedback(feedback: Feedback):
+    try:
+        db.add_feedback(feedback, db_path=state_module.active_db_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
     state_module.feedback_data.append(feedback)
     return {"message": "Feedback recorded successfully", "feedback": feedback}
 
@@ -20,6 +25,10 @@ def get_feedback():
 
 @router.delete("/feedback")
 def clear_feedback():
+    try:
+        db.clear_feedback(db_path=state_module.active_db_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
     state_module.feedback_data.clear()
     return {"message": "All feedback cleared"}
 

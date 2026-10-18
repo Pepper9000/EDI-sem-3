@@ -1,6 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from models.schemas import Energy, WearableData
+from services import db
 from services import state as state_module
 
 router = APIRouter()
@@ -8,6 +9,12 @@ router = APIRouter()
 
 @router.post("/energy")
 def set_energy(energy: Energy):
+    try:
+        db.set_setting(
+            "current_energy", str(energy.level), db_path=state_module.active_db_path
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
     state_module.current_energy = energy.level
     return {"message": "Energy level updated", "energy": state_module.current_energy}
 
@@ -19,6 +26,12 @@ def get_energy():
 
 @router.post("/wearable-data")
 def add_wearable_data(data: WearableData):
+    try:
+        db.set_setting(
+            "wearable_data", data.model_dump_json(), db_path=state_module.active_db_path
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
     state_module.wearable_data = data
     return {"message": "Wearable data received successfully", "data": state_module.wearable_data}
 

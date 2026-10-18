@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from models.schemas import RescheduleTaskRequest, Task
+from services import db
 from services import state as state_module
 from services.scheduler import validate_task_reschedule
 
@@ -10,6 +11,10 @@ router = APIRouter()
 @router.post("/tasks")
 def add_task(task: Task):
     state_module.assign_task_id(task)
+    try:
+        db.add_task(task, db_path=state_module.active_db_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
     state_module.tasks.append(task)
     return {"message": "Task added successfully", "task": task}
 
@@ -21,8 +26,13 @@ def get_tasks():
 
 @router.delete("/tasks")
 def clear_tasks():
+    try:
+        db.clear_tasks(db_path=state_module.active_db_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
     state_module.tasks.clear()
     state_module.manual_placements.clear()
+    state_module.next_task_id = 1
     return {"message": "All tasks cleared"}
 
 
@@ -30,6 +40,10 @@ def clear_tasks():
 def delete_task(task_id: int):
     for index, task in enumerate(state_module.tasks):
         if task.id == task_id:
+            try:
+                db.delete_task(task_id, db_path=state_module.active_db_path)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
             del state_module.tasks[index]
             state_module.manual_placements.pop(task_id, None)
             return {"message": f"Task {task_id} deleted successfully"}
@@ -43,6 +57,13 @@ def reschedule_task(task_id: int, request: RescheduleTaskRequest):
     )
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
+
+    try:
+        db.save_manual_placement(
+            task_id, request.date, request.start_time, db_path=state_module.active_db_path
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
 
     state_module.manual_placements[task_id] = {
         "date": request.date,

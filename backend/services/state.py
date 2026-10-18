@@ -1,7 +1,11 @@
 from datetime import date, datetime
+from pathlib import Path
 
 from models.schemas import Availability, Feedback, Task, TimeBlock, WearableData
+from services import db
 
+
+active_db_path: Path | None = None
 
 tasks: list[Task] = []
 current_energy = 3
@@ -14,12 +18,33 @@ end_of_day = "22:00"
 manual_placements: dict[int, dict] = {}
 
 
+def init_state(db_path: Path | str | None = None) -> None:
+    global active_db_path, tasks, current_energy, feedback_data, time_blocks
+    global availability_windows, wearable_data, next_task_id, end_of_day, manual_placements
+
+    target_path = Path(db_path).resolve() if db_path else db.get_default_db_path()
+    active_db_path = target_path
+    data = db.load_all(target_path)
+
+    tasks = data["tasks"]
+    manual_placements = data["manual_placements"]
+    availability_windows = data["availability"]
+    time_blocks = data["time_blocks"]
+    current_energy = data["settings"]["current_energy"]
+    end_of_day = data["settings"]["end_of_day"]
+    wearable_data = data["settings"]["wearable_data"]
+    feedback_data = data["feedback"]
+    next_task_id = data["next_task_id"]
+
 
 def assign_task_id(task: Task) -> None:
     global next_task_id
     if task.id is None:
         task.id = next_task_id
         next_task_id += 1
+    else:
+        if task.id >= next_task_id:
+            next_task_id = task.id + 1
 
 
 def time_to_minutes(value: str) -> int:
@@ -224,3 +249,7 @@ def build_reason_list(task: Task, energy_level: int, urgency: int, probability: 
     elif probability < 0.4:
         reasons.append("Model confidence is still modest")
     return reasons[:4]
+
+
+# Automatically initialize state on module import
+init_state()
