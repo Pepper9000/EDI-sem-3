@@ -312,6 +312,26 @@ def add_availability(window: Availability, db_path: Path | str | None = None) ->
         conn.close()
 
 
+def add_availability_batch(
+    windows: list[Availability], db_path: Path | str | None = None
+) -> int:
+    if not windows:
+        return 0
+    conn = get_connection(db_path)
+    try:
+        with conn:
+            cursor = conn.executemany(
+                """
+                INSERT OR IGNORE INTO availability (date, start_time, end_time)
+                VALUES (?, ?, ?)
+                """,
+                [(str(w.date), w.start_time, w.end_time) for w in windows],
+            )
+            return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def delete_availability_window(
     date_str: str, start_time: str, end_time: str, db_path: Path | str | None = None
 ) -> bool:

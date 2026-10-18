@@ -974,4 +974,232 @@ def test_database_errors_do_not_falsely_report_success(monkeypatch):
     assert len(state_module.tasks) == initial_tasks_count
 
 
+def test_weekly_availability_creates_expected_windows_within_horizon():
+    today = date.today()
+    client.delete("/availability")
+
+    horizon_dates = [today + timedelta(days=i) for i in range(7)]
+    target_weekdays = ["Monday", "Wednesday"]
+    expected_dates = [d for d in horizon_dates if d.strftime("%A") in target_weekdays]
+
+    res = client.post("/availability/weekly", json={
+        "weekdays": target_weekdays,
+        "start_time": "09:00",
+        "end_time": "11:00",
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total_created"] == len(expected_dates)
+    assert data["total_skipped"] == 0
+
+    avail = client.get("/availability").json()
+    assert len(avail) == len(expected_dates)
+    for exp_date in expected_dates:
+        assert any(w["date"] == exp_date.isoformat() and w["start_time"] == "09:00" and w["end_time"] == "11:00" for w in avail)
+
+
+def test_weekly_availability_never_affects_eighth_day():
+    today = date.today()
+    client.delete("/availability")
+
+    # Select all 7 weekdays
+    res = client.post("/availability/weekly", json={
+        "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+        "start_time": "10:00",
+        "end_time": "12:00",
+    })
+    assert res.status_code == 200
+    data = res.json()
+
+    # Must create exactly 7 windows (for today through day 7)
+    assert data["total_created"] == 7
+
+    day_eight = today + timedelta(days=7)
+    avail = client.get("/availability").json()
+    # Ensure no window exists on day eight or beyond
+    assert not any(w["date"] == day_eight.isoformat() for w in avail)
+    assert not any(w["date"] > (today + timedelta(days=6)).isoformat() for w in avail)
+
+
+def test_weekly_availability_repeated_submission_no_duplicates():
+    today = date.today()
+    client.delete("/availability")
+
+    payload = {
+        "weekdays": ["Tuesday", "Thursday"],
+        "start_time": "14:00",
+        "end_time": "16:00",
+    }
+    r1 = client.post("/availability/weekly", json=payload)
+    assert r1.status_code == 200
+    created_count = r1.json()["total_created"]
+    assert created_count > 0
+
+    # Repeated identical submission
+    r2 = client.post("/availability/weekly", json=payload)
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert data2["total_created"] == 0
+    assert data2["total_skipped"] == created_count
+    assert len(data2["skipped"]) == created_count
+
+    # Total in db/memory must remain created_count
+    avail = client.get("/availability").json()
+    assert len(avail) == created_count
+
+
+def test_weekly_availability_rejects_invalid_time_ranges():
+    # End time before start time
+    r1 = client.post("/availability/weekly", json={
+        "weekdays": ["Monday"],
+        "start_time": "15:00",
+        "end_time": "12:00",
+    })
+    assert r1.status_code == 400
+    assert "End time must be after start time" in r1.json()["detail"]
+
+    # End time equal to start time
+    r2 = client.post("/availability/weekly", json={
+        "weekdays": ["Monday"],
+        "start_time": "12:00",
+        "end_time": "12:00",
+    })
+    assert r2.status_code == 400
+
+    # Empty weekdays
+    r3 = client.post("/availability/weekly", json={
+        "weekdays": [],
+        "start_time": "09:00",
+        "end_time": "12:00",
+    })
+    assert r3.status_code == 422  # pydantic min_length validation
+
+    # Invalid time string format
+    r4 = client.post("/availability/weekly", json={
+        "weekdays": ["Monday"],
+        "start_time": "invalid",
+        "end_time": "12:00",
+    })
+    assert r4.status_code == 400
+
+
+def test_weekly_availability_preserves_existing_availability():
+    today = date.today()
+    client.delete("/availability")
+
+    # Add a custom individual window
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "07:00",
+        "end_time": "09:00",
+    })
+
+    # Add weekly availability
+    res = client.post("/availability/weekly", json={
+        "weekdays": [today.strftime("%A")],
+        "start_time": "13:00",
+        "end_time": "16:00",
+    })
+    assert res.status_code == 200
+
+    avail = client.get("/availability").json()
+    # Both windows must be present
+    today_windows = [w for w in avail if w["date"] == today.isoformat()]
+    assert len(today_windows) == 2
+    times = [(w["start_time"], w["end_time"]) for w in today_windows]
+    assert ("07:00", "09:00") in times
+    assert ("13:00", "16:00") in times
+
+
+def test_weekly_availability_overlapping_does_not_inflate_minutes():
+    today = date.today()
+    client.delete("/availability")
+
+    # Window 1: 10:00 to 12:00 (120 minutes)
+    client.post("/availability", json={
+        "date": today.isoformat(),
+        "start_time": "10:00",
+        "end_time": "12:00",
+    })
+
+    # Window 2 overlapping via weekly: 11:00 to 13:00 (120 minutes)
+    client.post("/availability/weekly", json={
+        "weekdays": [today.strftime("%A")],
+        "start_time": "11:00",
+        "end_time": "13:00",
+    })
+
+    avail = client.get("/availability").json()
+    assert len(avail) == 2
+
+    # Check schedule available minutes: union is 10:00 to 13:00 = 180 min, NOT 240 min
+    sched = client.get(f"/schedule?date={today.isoformat()}").json()
+    assert sched["available_minutes"] == 180
+
+
+def test_weekly_availability_survives_backend_reinitialization():
+    today = date.today()
+    client.delete("/availability")
+
+    res = client.post("/availability/weekly", json={
+        "weekdays": ["Monday", "Friday"],
+        "start_time": "08:00",
+        "end_time": "10:00",
+    })
+    created_count = res.json()["total_created"]
+
+    # Reinitialize state
+    state_module.init_state(state_module.active_db_path)
+
+    avail = client.get("/availability").json()
+    assert len(avail) == created_count
+    for w in avail:
+        assert w["start_time"] == "08:00"
+        assert w["end_time"] == "10:00"
+
+
+def test_planner_and_calendar_reflect_same_availability():
+    today = date.today()
+    client.delete("/availability")
+
+    client.post("/availability/weekly", json={
+        "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        "start_time": "09:00",
+        "end_time": "12:00",
+    })
+
+    sched = client.get("/schedule").json()
+    all_avail = client.get("/availability").json()
+
+    # The 7 days in sched['days'] (Calendar time-grid) and weekly overview must match all_avail
+    for day in sched["days"]:
+        day_date = day["date"]
+        matching_avail = [w for w in all_avail if w["date"] == day_date]
+        if matching_avail:
+            assert day["available_minutes"] == 180
+        else:
+            assert day["available_minutes"] == 0
+
+
+def test_weekly_availability_database_error_handling(monkeypatch):
+    import sqlite3
+
+    client.delete("/availability")
+
+    def failing_batch(*args, **kwargs):
+        raise sqlite3.OperationalError("Database disk error")
+
+    monkeypatch.setattr("services.db.add_availability_batch", failing_batch)
+
+    initial_len = len(state_module.availability_windows)
+    res = client.post("/availability/weekly", json={
+        "weekdays": ["Monday", "Tuesday"],
+        "start_time": "09:00",
+        "end_time": "11:00",
+    })
+    assert res.status_code == 500
+    assert "Database error" in res.json()["detail"]
+    assert len(state_module.availability_windows) == initial_len
+
+
 

@@ -15,6 +15,16 @@ const defaultTaskForm = { name: '', difficulty: 3, duration: 60, importance: 3, 
 const pageLoadedAt = new Date()
 const pageDate = new Date(pageLoadedAt.getTime() - pageLoadedAt.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
 const defaultAvailabilityForm = { date: pageDate, start_time: '09:00', end_time: '12:00' }
+const defaultWeeklyForm = { start_time: '09:00', end_time: '12:00' }
+const WEEKDAYS = [
+  { key: 'Monday', short: 'Mon' },
+  { key: 'Tuesday', short: 'Tue' },
+  { key: 'Wednesday', short: 'Wed' },
+  { key: 'Thursday', short: 'Thu' },
+  { key: 'Friday', short: 'Fri' },
+  { key: 'Saturday', short: 'Sat' },
+  { key: 'Sunday', short: 'Sun' },
+]
 const energyForHour = (hour) => {
   if (hour >= 9 && hour < 12) return 5
   if (hour >= 12 && hour < 14) return 3
@@ -92,6 +102,9 @@ function App() {
   const [settings, setSettings] = useState({ end_of_day: '22:00' })
   const [taskForm, setTaskForm] = useState(defaultTaskForm)
   const [availabilityForm, setAvailabilityForm] = useState(defaultAvailabilityForm)
+  const [availabilityMode, setAvailabilityMode] = useState('single') // 'single' | 'weekly'
+  const [weeklyForm, setWeeklyForm] = useState(defaultWeeklyForm)
+  const [selectedWeekdays, setSelectedWeekdays] = useState(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'])
   const [endOfDayDraft, setEndOfDayDraft] = useState('22:00')
   const [feedbackForm, setFeedbackForm] = useState({ taskId: '', completion_status: '', difficulty_feedback: '', timing_feedback: '', energy_impact: '' })
   const [selectedTaskDetails, setSelectedTaskDetails] = useState(null)
@@ -188,6 +201,33 @@ function App() {
     })
   }
 
+  const handleWeeklyAvailabilitySubmit = async (event) => {
+    event.preventDefault()
+    if (weeklyForm.start_time >= weeklyForm.end_time) {
+      setError('End time must be later than start time.')
+      return
+    }
+    if (selectedWeekdays.length === 0) {
+      setError('Select at least one weekday.')
+      return
+    }
+    await runAction('weekly-availability', async () => {
+      const result = await api.addWeeklyAvailability({
+        weekdays: selectedWeekdays,
+        start_time: weeklyForm.start_time,
+        end_time: weeklyForm.end_time,
+      })
+      setStatusMessage(result.message)
+      await refreshDashboard()
+    })
+  }
+
+  const toggleWeekday = (dayName) => {
+    setSelectedWeekdays((prev) =>
+      prev.includes(dayName) ? prev.filter((d) => d !== dayName) : [...prev, dayName]
+    )
+  }
+
   const handleSchedule = async () => {
     await runAction('schedule', async () => {
       const result = await api.getSchedule()
@@ -267,6 +307,22 @@ function App() {
 
   // Availability windows on the selected date
   const selectedDayAvailability = availability.filter((w) => w.date === activeDate)
+
+  // Weekly availability preview across 7-day horizon
+  const weeklyPreview = horizonDays
+    .filter((d) => selectedWeekdays.some((w) => w.toLowerCase() === d.day_name.toLowerCase()))
+    .map((d) => {
+      const exists = availability.some(
+        (w) => w.date === d.date && w.start_time === weeklyForm.start_time && w.end_time === weeklyForm.end_time
+      )
+      return {
+        ...d,
+        exists,
+      }
+    })
+
+  const willAddCount = weeklyPreview.filter((p) => !p.exists).length
+  const alreadyExistsCount = weeklyPreview.filter((p) => p.exists).length
 
   // Collect authoritative unscheduled tasks list across horizon
   const scheduledTaskIds = new Set(
@@ -694,12 +750,131 @@ function App() {
                   </div>
                 )) : <p className="empty-note">No availability windows configured for {selectedDay.short_date || activeDate}.</p>}
               </div>
-              <form className="availability-form" onSubmit={handleAvailabilitySubmit}>
-                <label className="field-label">Date<input type="date" required value={availabilityForm.date} onChange={(event) => setAvailabilityForm({ ...availabilityForm, date: event.target.value })} /></label>
-                <label className="field-label">From<input type="time" required value={availabilityForm.start_time} onChange={(event) => setAvailabilityForm({ ...availabilityForm, start_time: event.target.value })} /></label>
-                <label className="field-label">To<input type="time" required value={availabilityForm.end_time} onChange={(event) => setAvailabilityForm({ ...availabilityForm, end_time: event.target.value })} /></label>
-                <button className="button button-small" type="submit" disabled={Boolean(busy)}>{busy === 'availability' ? 'Adding…' : 'Add window'}</button>
-              </form>
+              {/* Availability Mode Toggle */}
+              <div className="availability-mode-toggle" role="tablist" aria-label="Availability mode">
+                <button
+                  type="button"
+                  className={`mode-tab ${availabilityMode === 'single' ? 'active' : ''}`}
+                  onClick={() => setAvailabilityMode('single')}
+                  role="tab"
+                  aria-selected={availabilityMode === 'single'}
+                >
+                  Single day window
+                </button>
+                <button
+                  type="button"
+                  className={`mode-tab ${availabilityMode === 'weekly' ? 'active' : ''}`}
+                  onClick={() => setAvailabilityMode('weekly')}
+                  role="tab"
+                  aria-selected={availabilityMode === 'weekly'}
+                >
+                  Add weekly availability
+                </button>
+              </div>
+
+              {availabilityMode === 'single' ? (
+                <form className="availability-form" onSubmit={handleAvailabilitySubmit}>
+                  <label className="field-label">Date<input type="date" required value={availabilityForm.date} onChange={(event) => setAvailabilityForm({ ...availabilityForm, date: event.target.value })} /></label>
+                  <label className="field-label">From<input type="time" required value={availabilityForm.start_time} onChange={(event) => setAvailabilityForm({ ...availabilityForm, start_time: event.target.value })} /></label>
+                  <label className="field-label">To<input type="time" required value={availabilityForm.end_time} onChange={(event) => setAvailabilityForm({ ...availabilityForm, end_time: event.target.value })} /></label>
+                  <button className="button button-small" type="submit" disabled={Boolean(busy)}>{busy === 'availability' ? 'Adding…' : 'Add window'}</button>
+                </form>
+              ) : (
+                <form className="weekly-availability-form" onSubmit={handleWeeklyAvailabilitySubmit}>
+                  <div className="weekday-picker-header">
+                    <span className="field-title">Select weekdays (within 7-day horizon)</span>
+                    <div className="preset-links">
+                      <button type="button" className="text-link" onClick={() => setSelectedWeekdays(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'])}>Mon–Fri</button>
+                      <button type="button" className="text-link" onClick={() => setSelectedWeekdays(['Saturday', 'Sunday'])}>Sat–Sun</button>
+                      <button type="button" className="text-link" onClick={() => setSelectedWeekdays(WEEKDAYS.map((w) => w.key))}>All</button>
+                    </div>
+                  </div>
+
+                  <div className="weekday-chips" role="group" aria-label="Select weekdays">
+                    {WEEKDAYS.map((w) => {
+                      const isSelected = selectedWeekdays.includes(w.key)
+                      return (
+                        <button
+                          key={w.key}
+                          type="button"
+                          className={`choice-chip ${isSelected ? 'selected' : ''}`}
+                          aria-pressed={isSelected}
+                          onClick={() => toggleWeekday(w.key)}
+                        >
+                          {w.short}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  <div className="two-fields">
+                    <label className="field-label">
+                      From
+                      <input
+                        type="time"
+                        required
+                        value={weeklyForm.start_time}
+                        onChange={(e) => setWeeklyForm({ ...weeklyForm, start_time: e.target.value })}
+                      />
+                    </label>
+                    <label className="field-label">
+                      To
+                      <input
+                        type="time"
+                        required
+                        value={weeklyForm.end_time}
+                        onChange={(e) => setWeeklyForm({ ...weeklyForm, end_time: e.target.value })}
+                      />
+                    </label>
+                  </div>
+
+                  {/* Preview of matching dates within 7-day horizon */}
+                  <div className="weekly-preview-container">
+                    <div className="weekly-preview-header">
+                      <span className="preview-label">Matching dates preview:</span>
+                      <span className="preview-summary-stat">
+                        <strong>{willAddCount}</strong> to add · <strong>{alreadyExistsCount}</strong> existing
+                      </span>
+                    </div>
+
+                    <div className="weekly-preview-list">
+                      {weeklyPreview.length ? (
+                        weeklyPreview.map((item) => (
+                          <div key={item.date} className={`weekly-preview-item ${item.exists ? 'is-existing' : 'is-new'}`}>
+                            <div className="preview-item-info">
+                              <strong>{item.is_today ? 'Today' : item.day_name}</strong>
+                              <span className="preview-date-sub">{item.short_date || item.date}</span>
+                            </div>
+                            {item.exists ? (
+                              <span className="preview-badge duplicate" title="Window already configured">
+                                Already exists
+                              </span>
+                            ) : (
+                              <span className="preview-badge will-add">
+                                Will add {weeklyForm.start_time}–{weeklyForm.end_time}
+                              </span>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="empty-preview-note">No weekdays selected. Choose one or more weekdays above.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    className="button button-primary button-wide"
+                    type="submit"
+                    disabled={Boolean(busy) || selectedWeekdays.length === 0 || willAddCount === 0}
+                  >
+                    {busy === 'weekly-availability'
+                      ? 'Creating windows…'
+                      : willAddCount === 0
+                        ? 'All selected windows already exist'
+                        : `Add weekly availability (${willAddCount} ${willAddCount === 1 ? 'window' : 'windows'})`}
+                  </button>
+                </form>
+              )}
               <form className="cutoff-row" onSubmit={handleEndOfDaySubmit}>
                 <label className="field-label">End of day<input type="time" min="17:00" max="23:59" step="60" value={endOfDayDraft} onChange={(event) => setEndOfDayDraft(event.target.value)} /></label>
                 <button className="button button-small button-quiet" type="submit" disabled={Boolean(busy) || endOfDayDraft === settings.end_of_day}>{busy === 'settings' ? 'Saving…' : 'Save cutoff'}</button>

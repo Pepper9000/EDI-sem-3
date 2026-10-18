@@ -209,4 +209,62 @@ test('tab navigation supports planner and calendar views', () => {
   assert.equal(activeTab, 'planner')
 })
 
+test('addWeeklyAvailability sends POST to /availability/weekly with weekdays and times', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (...args) => {
+    calls.push(args)
+    return jsonResponse({
+      message: 'Created 2 availability windows, skipped 1 duplicates.',
+      created: [],
+      skipped: [],
+      total_created: 2,
+      total_skipped: 1,
+    })
+  }
+
+  try {
+    const payload = {
+      weekdays: ['Monday', 'Wednesday'],
+      start_time: '09:00',
+      end_time: '12:00',
+    }
+    const result = await api.addWeeklyAvailability(payload)
+    assert.equal(result.total_created, 2)
+    assert.equal(calls[0][0], 'http://127.0.0.1:8000/availability/weekly')
+    assert.equal(calls[0][1].method, 'POST')
+    assert.equal(calls[0][1].body, JSON.stringify(payload))
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('previewWeeklyAvailability sends POST to /availability/weekly/preview', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (...args) => {
+    calls.push(args)
+    return jsonResponse({
+      matching_dates: [],
+      will_add_count: 3,
+      already_exists_count: 0,
+      total_matching: 3,
+    })
+  }
+
+  try {
+    const payload = {
+      weekdays: ['Monday', 'Tuesday', 'Wednesday'],
+      start_time: '14:00',
+      end_time: '17:00',
+    }
+    const result = await api.previewWeeklyAvailability(payload)
+    assert.equal(result.will_add_count, 3)
+    assert.equal(calls[0][0], 'http://127.0.0.1:8000/availability/weekly/preview')
+    assert.equal(calls[0][1].method, 'POST')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 

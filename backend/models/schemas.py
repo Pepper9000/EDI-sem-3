@@ -45,6 +45,12 @@ class Availability(BaseModel):
     end_time: str
 
 
+class WeeklyAvailabilityRequest(BaseModel):
+    weekdays: list[str | int] = Field(..., min_length=1)
+    start_time: str
+    end_time: str
+
+
 class EndOfDaySetting(BaseModel):
     end_of_day: str = "22:00"
 

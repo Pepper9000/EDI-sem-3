@@ -78,6 +78,14 @@ const api = {
     method: 'POST',
     body: JSON.stringify({ date, start_time }),
   }),
+  previewWeeklyAvailability: (payload) => request('/availability/weekly/preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  addWeeklyAvailability: (payload) => request('/availability/weekly', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
 }
 
 export { API_BASE_URL, api }
